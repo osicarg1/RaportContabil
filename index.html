@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generator Raport Balanta</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <section class="panel panel-left">
+      <h1>Generator email/raport balanta pe conturi</h1>
+      <p class="subtitle">
+        Incarca un fisier de balanta pe conturi (CSV/XLS/XLSX) si obtine instant un rezumat executiv pentru administrator.
+      </p>
+
+      <form id="input-form" class="form-grid">
+        <label>
+          Firma
+          <input id="companyName" type="text" placeholder="Ex: SC Exemplu SRL" required />
+        </label>
+
+        <label>
+          Administrator
+          <input id="adminName" type="text" placeholder="Ex: Popescu Andrei" required />
+        </label>
+
+        <label>
+          Email administrator
+          <input id="adminEmail" type="email" placeholder="Ex: administrator@firma.ro" required />
+        </label>
+
+        <label>
+          Perioada raportata
+          <input id="reportPeriod" type="text" placeholder="Ex: 01.01.2026 - 30.06.2026" required />
+        </label>
+
+        <label class="full">
+          Fisier balanta pe conturi
+          <input id="balanceFile" type="file" accept=".csv,.xlsx,.xls" required />
+        </label>
+
+        <div class="actions full">
+          <button type="submit">Genereaza raport</button>
+        </div>
+      </form>
+
+      <details class="hint">
+        <summary>Ce coloane cauta aplicatia?</summary>
+        <p>
+          Aplicatia identifica foile anuale (ex: 2024, 2025, 2026), conturile contabile si totalurile relevante
+          (ex: Total Venituri, Total Cheltuieli, cont 121) pentru analiza automata.
+        </p>
+      </details>
+    </section>
+
+    <section class="panel panel-right">
+      <h2>Raport generat</h2>
+      <textarea id="reportOutput" placeholder="Raportul va aparea aici..." readonly></textarea>
+
+      <div class="actions">
+        <button id="copyBtn" type="button" disabled>Copiaza text</button>
+        <a id="mailtoLink" class="button-link disabled" href="#" aria-disabled="true">Deschide email</a>
+      </div>
+
+      <p class="footnote">
+        Nota: Acest instrument ofera o sinteza automata pe baza balantei pe conturi. Verificarea finala ramane responsabilitatea profesionistului contabil.
+      </p>
+
+      <section id="chartsSection" class="charts" hidden>
+        <h3>Evolutie financiara</h3>
+        <div class="chart-card">
+          <h4>Comparatie anuala (YTD)</h4>
+          <canvas id="yearlyChart" aria-label="Comparatie anuala" role="img"></canvas>
+        </div>
+        <div class="chart-card">
+          <h4>Comparatie lunara (an curent vs an precedent)</h4>
+          <canvas id="monthlyChart" aria-label="Comparatie lunara" role="img"></canvas>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="app.js?v=20260721-3"></script>
+</body>
+</html>

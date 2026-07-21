@@ -636,8 +636,8 @@ function computePdfBalanceMetrics(rows, standardValues) {
   const impozitDividendeSold = netByPrefixFinal(accountRows, ["446.01"], "credit");
   const impozitProfitLunar = sumByPrefixRulaj(accountRows, ["691"], "debit");
 
-  const topClienti = topAccounts(accountRowsRaw, ["4111"], "soldFinalDeb", 8, true);
-  const topFurnizori = topAccounts(accountRowsRaw, ["401"], "soldFinalCred", 8, true);
+  const topClienti = topAccounts(accountRowsRaw, ["4111"], "totalDeb", 8, true);
+  const topFurnizori = topAccounts(accountRowsRaw, ["401"], "totalCred", 8, true);
   const requestedElements = buildRequestedElementsPdfAnalysis(accountRows, {
     totalVenituri: venituriLunare,
     totalCheltuieli: cheltuieliLunare,
@@ -1995,10 +1995,10 @@ function buildReport({ companyName, adminName, reportPeriod, metrics }) {
       `- Decontari cu asociatii (455/456) sold: ${formatCurrency(metrics.decontariAsociatiSold)}`,
       `- Creante din dividende repartizate (463) sold: ${formatCurrency(metrics.creanteDividende463)}`,
       "",
-      "6) Top expuneri clienti (sold final debitor)",
+      "6) Top expuneri clienti (total sume debitoare)",
       ...topClienti,
       "",
-      "7) Top expuneri furnizori (sold final creditor)",
+      "7) Top expuneri furnizori (total sume creditoare)",
       ...topFurnizori,
       "",
       "8) Alerte automate",

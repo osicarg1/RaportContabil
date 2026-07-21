@@ -93,6 +93,10 @@ textarea {
   background: #fff;
 }
 
+.report-raw-hidden {
+  display: none;
+}
+
 .report-preview {
   margin-top: 10px;
   border: 1px solid var(--border);

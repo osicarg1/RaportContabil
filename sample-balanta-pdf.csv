@@ -1,0 +1,35 @@
+PROPACK SRL,,,,,,,,,
+Perioada: Mai 2026,,,,,,,,,
+Simbol cont,Denumire,Sold initial debitor,Sold initial creditor,Rulaj lunar debitor,Rulaj lunar creditor,Total sume debitoare,Total sume creditoare,Sold final debitor,Sold final creditor
+121,Profit sau pierdere,0,391813.11,363197.73,395949.51,1896304.45,1967365.06,0,71060.61
+371,Marfuri,135790.35,0,342168.71,293174.30,1383783.20,1119937.97,263845.23,0
+401,Furnizori,0,806258.30,302377.55,454237.06,1518683.78,2497028.22,0,978344.44
+4111,Clienti,470612.12,0,479098.88,337896.20,2352030.02,1664735.73,687294.29,0
+421,Personal - salarii datorate,0,18870.00,29341.00,23975.00,163137.00,176667.00,0,13530.00
+4315,Contributia de asigurari sociale,0,16688.00,16699.00,5994.00,50079.00,56073.00,0,5994.00
+4423,TVA de plata,0,19594.33,18035.00,5990.39,53910.01,59900.19,0,5990.18
+446.01,Impozit dividende,0,16477.00,0,0,16477.00,16477.00,0,0
+457,Dividende de plata,0,0,12900.00,0,363733.00,415433.00,0,51700.00
+463,Creante reprezentand dividende repartizate,333333.00,0,0,0,333333.00,333333.00,0,0
+5121,Conturi la banci in lei,200.00,0,541630.55,541630.55,2801640.81,2801440.81,200.00,0
+5191,Credite bancare pe termen scurt,0,88338.26,151942.58,178734.35,945372.11,1212272.71,0,266900.60
+5311,Casa in lei,8607.68,0,0,0,21114.00,2236.57,18877.43,0
+542,Avansuri de trezorerie,1528.93,0,0,0,2515.07,2030.23,484.84,0
+607,Cheltuieli privind marfurile,0,0,293173.68,293173.68,1119933.61,1119933.61,0,0
+611,Cheltuieli cu intretinerea si reparatiile,0,0,0,0,3455.00,3455.00,0,0
+613,Cheltuieli cu primele de asigurare,0,0,7013.20,7013.20,23115.47,23115.47,0,0
+622,Cheltuieli privind comisioanele si onorariile,0,0,1250.00,1250.00,4250.00,4250.00,0,0
+624,Cheltuieli cu transportul de bunuri si personal,0,0,1459.69,1459.69,3004.31,3004.31,0,0
+626,Cheltuieli postale si taxe de telecomunicatii,0,0,994.43,994.43,9335.79,9335.79,0,0
+627,Cheltuieli cu serviciile bancare si asimilate,0,0,409.37,409.37,3073.10,3073.10,0,0
+628,Alte cheltuieli cu serviciile executate de terti,0,0,2737.41,2737.41,9421.90,9421.90,0,0
+635,Cheltuieli cu alte impozite taxe si varsaminte asimilate,0,0,0,0,10473.00,10473.00,0,0
+641,Cheltuieli cu salariile personalului,0,0,23975.00,23975.00,157543.00,157543.00,0,0
+6422,Cheltuieli cu tichetele acordate salariatilor,0,0,2655.00,2655.00,16830.00,16830.00,0,0
+6458,Alte cheltuieli privind asigurarile si protectia sociala,0,0,165.29,165.29,4280.00,4280.00,0,0
+6461,Cheltuieli privind contributia asiguratorie pentru munca,0,0,539.00,539.00,3544.00,3544.00,0,0
+6581,Despagubiri amenzi si penalitati,0,0,0,0,771.82,771.82,0,0
+666,Cheltuieli privind dobanzile,0,0,3575.82,3575.82,16260.96,16260.96,0,0
+691,Cheltuieli cu impozitul pe profit,0,0,0,0,4570.00,4570.00,0,0
+706,Venituri din redevente locatii de gestiune si chirii,0,0,0,0,6611.58,6611.58,0,0
+707,Venituri din vanzarea marfurilor,0,0,395949.51,395949.51,1568940.37,1568940.37,0,0

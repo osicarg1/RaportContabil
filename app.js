@@ -5,9 +5,18 @@ const mailtoLink = document.getElementById("mailtoLink");
 const chartsSection = document.getElementById("chartsSection");
 const yearlyChartCanvas = document.getElementById("yearlyChart");
 const monthlyChartCanvas = document.getElementById("monthlyChart");
+const companyNameInput = document.getElementById("companyName");
+const adminNameInput = document.getElementById("adminName");
+const adminEmailInput = document.getElementById("adminEmail");
+const reportPeriodInput = document.getElementById("reportPeriod");
+const balanceFileInput = document.getElementById("balanceFile");
 
 let yearlyChartInstance = null;
 let monthlyChartInstance = null;
+let extractionCache = {
+  key: "",
+  rows: null
+};
 
 if (chartsSection) {
   chartsSection.hidden = true;
@@ -68,11 +77,11 @@ form.addEventListener("submit", async (event) => {
     chartsSection.hidden = true;
   }
 
-  const companyName = document.getElementById("companyName").value.trim();
-  const adminName = document.getElementById("adminName").value.trim();
-  const adminEmail = document.getElementById("adminEmail").value.trim();
-  const reportPeriod = document.getElementById("reportPeriod").value.trim();
-  const fileInput = document.getElementById("balanceFile");
+  const companyName = companyNameInput.value.trim();
+  const adminName = adminNameInput.value.trim();
+  const adminEmail = adminEmailInput.value.trim();
+  const reportPeriod = reportPeriodInput.value.trim();
+  const fileInput = balanceFileInput;
 
   if (!fileInput.files || !fileInput.files[0]) {
     alert("Selecteaza un fisier de balanta pe conturi.");
@@ -81,7 +90,7 @@ form.addEventListener("submit", async (event) => {
 
   try {
     const file = fileInput.files[0];
-    const rows = await extractRows(file);
+    const rows = await extractRowsWithCache(file);
     const metrics = computeMetrics(rows);
     const report = buildReport({ companyName, adminName, reportPeriod, metrics });
 
@@ -93,6 +102,21 @@ form.addEventListener("submit", async (event) => {
     console.error(error);
     alert("Nu am putut procesa fisierul. Verifica formatul si incearca din nou.");
     clearCharts();
+  }
+});
+
+balanceFileInput.addEventListener("change", async () => {
+  if (!balanceFileInput.files || !balanceFileInput.files[0]) {
+    return;
+  }
+
+  try {
+    const file = balanceFileInput.files[0];
+    const rows = await extractRowsWithCache(file);
+    const defaults = inferFormDefaults(rows, file.name);
+    applyDetectedDefaults(defaults);
+  } catch (error) {
+    console.warn("Autofill metadata failed:", error);
   }
 });
 
@@ -117,7 +141,156 @@ function updateMailto(email, companyName, reportPeriod, report) {
   mailtoLink.setAttribute("aria-disabled", "false");
 }
 
+function getFileCacheKey(file) {
+  return [file.name, file.size, file.lastModified].join("::");
+}
+
+async function extractRowsWithCache(file) {
+  const key = getFileCacheKey(file);
+  if (extractionCache.key === key && extractionCache.rows) {
+    return extractionCache.rows;
+  }
+
+  const rows = await extractRows(file);
+  extractionCache = { key, rows };
+  return rows;
+}
+
+function applyDetectedDefaults(defaults) {
+  if (!defaults) {
+    return;
+  }
+
+  if (defaults.companyName && !companyNameInput.value.trim()) {
+    companyNameInput.value = defaults.companyName;
+  }
+
+  if (defaults.adminName && !adminNameInput.value.trim()) {
+    adminNameInput.value = defaults.adminName;
+  } else if (!adminNameInput.value.trim()) {
+    adminNameInput.value = "Administrator";
+  }
+
+  if (defaults.adminEmail && !adminEmailInput.value.trim()) {
+    adminEmailInput.value = defaults.adminEmail;
+  }
+
+  if (defaults.reportPeriod && !reportPeriodInput.value.trim()) {
+    reportPeriodInput.value = defaults.reportPeriod;
+  }
+}
+
+function inferFormDefaults(rows, fileName) {
+  const metadata = detectPdfBalanceStructure(rows)
+    ? extractPdfBalanceMetadata(rows)
+    : { company: "", period: "" };
+
+  const textLines = rows
+    .map((row) => (row.cells || []).join(" ").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 400);
+  const joinedText = textLines.join("\n");
+
+  const companyFromPdf = sanitizeCompanyName(metadata.company || "");
+  const companyFromRows = detectCompanyName(textLines);
+  const periodFromPdf = sanitizePeriod(metadata.period || "");
+  const periodFromRows = detectPeriodValue(joinedText, rows, fileName);
+  const adminName = detectAdminName(joinedText);
+  const adminEmail = detectEmail(joinedText);
+
+  return {
+    companyName: companyFromPdf || companyFromRows || "",
+    adminName,
+    adminEmail,
+    reportPeriod: periodFromPdf || periodFromRows || ""
+  };
+}
+
+function sanitizeCompanyName(value) {
+  const text = String(value || "").replace(/x{3,}/gi, "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    return "";
+  }
+
+  const companyMatch = text.match(/(?:SC\s+)?[A-Z0-9&\-. ]{2,}\s(?:SRL|S\.R\.L\.|SA|S\.A\.|PFA)$/i);
+  if (companyMatch) {
+    return companyMatch[0].replace(/\s+/g, " ").trim();
+  }
+
+  return text.length <= 80 ? text : "";
+}
+
+function detectCompanyName(lines) {
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/x{3,}/gi, "").replace(/\s+/g, " ").trim();
+    if (!line) {
+      continue;
+    }
+
+    const match = line.match(/(?:SC\s+)?[A-Z0-9&\-. ]{2,}\s(?:SRL|S\.R\.L\.|SA|S\.A\.|PFA)\b/i);
+    if (match) {
+      return match[0].replace(/\s+/g, " ").trim();
+    }
+  }
+
+  return "";
+}
+
+function sanitizePeriod(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function detectPeriodValue(fullText, rows, fileName) {
+  const monthMatch = fullText.match(/\b(ianuarie|februarie|martie|aprilie|mai|iunie|iulie|august|septembrie|octombrie|noiembrie|decembrie)\s+\d{4}\b/i);
+  if (monthMatch) {
+    const text = monthMatch[0];
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
+  const intervalMatch = fullText.match(/\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s*[-–]\s*\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b/);
+  if (intervalMatch) {
+    return intervalMatch[0];
+  }
+
+  const yearFromSheet = [...new Set(rows
+    .map((row) => String(row.sheetName || "").trim())
+    .filter((name) => /^\d{4}$/.test(name)))]
+    .sort()
+    .pop();
+  if (yearFromSheet) {
+    return yearFromSheet;
+  }
+
+  const yearFromFile = String(fileName || "").match(/\b(20\d{2})\b/);
+  return yearFromFile ? yearFromFile[1] : "";
+}
+
+function detectAdminName(fullText) {
+  const patterns = [
+    /administrator(?:\s+legal)?\s*[:\-]\s*([A-ZĂÂÎȘȚ][A-Za-zĂÂÎȘȚăâîșț'\-]+(?:\s+[A-ZĂÂÎȘȚ][A-Za-zĂÂÎȘȚăâîșț'\-]+){1,3})/i,
+    /reprezentant\s+legal\s*[:\-]\s*([A-ZĂÂÎȘȚ][A-Za-zĂÂÎȘȚăâîșț'\-]+(?:\s+[A-ZĂÂÎȘȚ][A-Za-zĂÂÎȘȚăâîșț'\-]+){1,3})/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = fullText.match(pattern);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+  }
+
+  return "";
+}
+
+function detectEmail(fullText) {
+  const match = fullText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0].toLowerCase() : "";
+}
+
 async function extractRows(file) {
+  if (/\.pdf$/i.test(file.name)) {
+    return extractRowsFromPdf(file);
+  }
+
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: "array" });
   const rows = [];
@@ -139,6 +312,113 @@ async function extractRows(file) {
   return rows;
 }
 
+async function extractRowsFromPdf(file) {
+  if (!window.pdfjsLib) {
+    throw new Error("Biblioteca PDF nu este disponibila in pagina.");
+  }
+
+  if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+
+  const buffer = await file.arrayBuffer();
+  const loadingTask = window.pdfjsLib.getDocument({ data: buffer });
+  const pdf = await loadingTask.promise;
+  const rows = [];
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+    const page = await pdf.getPage(pageNum);
+    const content = await page.getTextContent();
+    const grouped = groupPdfItemsByLine(content.items || []);
+    const sheetName = `PDF-${pageNum}`;
+
+    grouped.forEach((line) => {
+      const text = line.join(" ").replace(/\s+/g, " ").trim();
+      if (!text) {
+        return;
+      }
+
+      const parsedCells = parsePdfBalanceLine(text);
+      rows.push({
+        sheetName,
+        cells: parsedCells,
+        normalizedSheetName: normalizeText(sheetName)
+      });
+    });
+  }
+
+  return rows;
+}
+
+function groupPdfItemsByLine(items) {
+  const lineMap = new Map();
+
+  items.forEach((item) => {
+    const y = Math.round((item.transform && item.transform[5]) || 0);
+    const x = (item.transform && item.transform[4]) || 0;
+    if (!lineMap.has(y)) {
+      lineMap.set(y, []);
+    }
+
+    lineMap.get(y).push({ x, str: String(item.str || "").trim() });
+  });
+
+  return [...lineMap.entries()]
+    .sort((a, b) => b[0] - a[0])
+    .map(([, itemsOnLine]) => itemsOnLine
+      .sort((a, b) => a.x - b.x)
+      .map((item) => item.str)
+      .filter(Boolean));
+}
+
+function parsePdfBalanceLine(text) {
+  const classMatch = text.match(/^Clasa\s+([1-7])\s+(.+?)\s+(-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2})(?:\s+(-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2})){7}\s*$/i);
+  if (classMatch) {
+    const numbers = text.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2}|-?\d+/g) || [];
+    const trailingNums = numbers.slice(-8);
+    return [`CLASA${classMatch[1]}`, `Clasa ${classMatch[1]} ${classMatch[2].trim()}`, ...trailingNums];
+  }
+
+  const headerLike = /simbol\s*cont/i.test(text) && /sold\s*initial/i.test(text);
+  if (headerLike) {
+    return [
+      "Simbol cont",
+      "Denumire",
+      "Sold initial debitor",
+      "Sold initial creditor",
+      "Rulaj lunar debitor",
+      "Rulaj lunar creditor",
+      "Total sume debitoare",
+      "Total sume creditoare",
+      "Sold final debitor",
+      "Sold final creditor"
+    ];
+  }
+
+  const accountMatch = text.match(/^(\d{3,4}(?:\s*\.\s*\d{1,2})?)\s+/);
+  if (!accountMatch) {
+    return [text];
+  }
+
+  const symbol = normalizeAccountSymbol(accountMatch[1]);
+  const numbers = text.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2}|-?\d+/g) || [];
+  if (numbers.length < 8) {
+    return [text];
+  }
+
+  const trailingNums = numbers.slice(-8);
+  const namePart = text
+    .slice(accountMatch[0].length)
+    .replace(new RegExp(`${trailingNums.map((n) => escapeRegExp(n)).join("\\s*")}$`), "")
+    .trim();
+
+  return [symbol, namePart, ...trailingNums];
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function computeMetrics(rows) {
   const values = {};
 
@@ -146,6 +426,10 @@ function computeMetrics(rows) {
     const found = findBestIndicatorValue(rows, indicator);
     values[key] = found;
   });
+
+  if (detectPdfBalanceStructure(rows)) {
+    return computePdfBalanceMetrics(rows, values);
+  }
 
   const hasOfficialSheets = rows.some((row) => {
     const sheetName = normalizeText(row.sheetName || "");
@@ -204,6 +488,310 @@ function computeMetrics(rows) {
     missingIndicators,
     mode: "standard"
   };
+}
+
+function detectPdfBalanceStructure(rows) {
+  return rows.some((row) => {
+    const text = normalizeText((row.cells || []).join(" "));
+    return text.includes("simbolcont") && text.includes("soldinitial") && text.includes("rulajlunar") && text.includes("soldfinal");
+  });
+}
+
+function computePdfBalanceMetrics(rows, standardValues) {
+  const metadata = extractPdfBalanceMetadata(rows);
+  const accountRowsRaw = extractPdfBalanceAccounts(rows);
+  const accountRows = toCanonicalRows(accountRowsRaw);
+
+  if (!accountRows.length) {
+    return {
+      mode: "pdf-balance",
+      error: "Structura de balanta PDF/XLS a fost detectata, dar nu s-au extras conturi numerice.",
+      metadata,
+      foundRows: standardValues,
+      missingIndicators: []
+    };
+  }
+
+  const venituriLunare = sumByClassRulaj(accountRows, "7", "credit");
+  const cheltuieliLunare = sumByClassRulaj(accountRows, "6", "debit");
+  const rezultatLunar = venituriLunare - cheltuieliLunare;
+
+  const rezultatCumulat121 = netByPrefixFinal(accountRows, ["121"], "credit");
+  const rezultatCumulat = rezultatCumulat121 !== 0 ? rezultatCumulat121 : rezultatLunar;
+
+  const activeImobilizateNet = netByPrefixFinal(accountRows, ["2"], "debit");
+  const stocuriNet = netByPrefixFinal(accountRows, ["3"], "debit");
+  const creanteClientiNet = netByPrefixFinal(accountRows, ["411", "413"], "debit");
+  const numerarBanciCasa = netByPrefixFinal(accountRows, ["512", "531", "532"], "debit");
+  const avansuriTrezorerie = netByPrefixFinal(accountRows, ["542"], "debit");
+
+  const datoriiFurnizori = netByPrefixFinal(accountRows, ["401", "408", "419"], "credit");
+  const datoriiSalariale = netByPrefixFinal(accountRows, ["421"], "credit");
+  const datoriiFiscale = netByPrefixFinal(accountRows, ["431", "436", "4423", "444", "446", "447", "448"], "credit");
+  const crediteScurte = netByPrefixFinal(accountRows, ["519"], "credit");
+  const capitaluriProprii = netByPrefixFinal(accountRows, ["101", "105", "106", "117", "121"], "credit");
+
+  const totalActiveEstimate = Math.max(activeImobilizateNet + stocuriNet + creanteClientiNet + numerarBanciCasa + avansuriTrezorerie, 0);
+  const totalDatoriiEstimate = Math.max(datoriiFurnizori + datoriiSalariale + datoriiFiscale + crediteScurte, 0);
+  const trezorerieNeta = numerarBanciCasa - crediteScurte;
+
+  const marjaLunara = safeDivide(rezultatLunar, venituriLunare);
+  const gradIndatorare = safeDivide(totalDatoriiEstimate, capitaluriProprii);
+  const lichiditateImediata = safeDivide(numerarBanciCasa + creanteClientiNet, totalDatoriiEstimate);
+
+  const cheltMarfaLunar = sumByPrefixRulaj(accountRows, ["607"], "debit");
+  const cheltPersonalLunar = sumByPrefixRulaj(accountRows, ["641", "642", "643", "644", "645", "646"], "debit");
+  const cheltServiciiLunar = sumByPrefixRulaj(accountRows, ["611", "612", "613", "614", "615", "621", "622", "623", "624", "625", "626", "627", "628"], "debit");
+  const cheltDobanziLunar = sumByPrefixRulaj(accountRows, ["666"], "debit");
+  const cheltTaxeLunar = sumByPrefixRulaj(accountRows, ["635", "691", "698"], "debit");
+  const cashOutLunarProxy = cheltMarfaLunar + cheltPersonalLunar + cheltServiciiLunar + cheltDobanziLunar + cheltTaxeLunar;
+
+  const dividendeDePlataSold = netByPrefixFinal(accountRows, ["457"], "credit");
+  const platiDividendeLunare = sumByPrefixRulaj(accountRows, ["457"], "debit");
+  const decontariAsociatiSold = netByPrefixFinal(accountRows, ["455", "456"], "credit");
+  const creanteDividende463 = netByPrefixFinal(accountRows, ["463"], "debit");
+  const impozitDividendeSold = netByPrefixFinal(accountRows, ["446.01"], "credit");
+  const impozitProfitLunar = sumByPrefixRulaj(accountRows, ["691"], "debit");
+
+  const topClienti = topAccounts(accountRowsRaw, ["4111"], "soldFinalDeb", 8, true);
+  const topFurnizori = topAccounts(accountRowsRaw, ["401"], "soldFinalCred", 8, true);
+  const requestedElements = buildRequestedElementsPdfAnalysis(accountRows, {
+    totalVenituri: venituriLunare,
+    totalCheltuieli: cheltuieliLunare,
+    rezultat121: rezultatCumulat
+  });
+
+  const alerts = [];
+  if (marjaLunara !== null && marjaLunara < 0.05) {
+    alerts.push("Marja lunara sub 5%: profitabilitate lunara fragila.");
+  }
+  if (lichiditateImediata !== null && lichiditateImediata < 1) {
+    alerts.push("Lichiditate imediata sub 1: presiune potentiala pe plata obligatiilor curente.");
+  }
+  if (cheltMarfaLunar > 0 && safeDivide(cheltMarfaLunar, cheltuieliLunare) > 0.75) {
+    alerts.push("Pondere foarte mare a cheltuielilor cu marfa in total cheltuieli lunare.");
+  }
+  if (dividendeDePlataSold > 0 || platiDividendeLunare > 0) {
+    alerts.push("Exista expunere/miscari pe dividende (cont 457); verificati corelarea cu deciziile AGA.");
+  }
+  if (impozitDividendeSold > 0) {
+    alerts.push("Exista sold la impozit dividende (446.01); verificati scadentele de plata.");
+  }
+
+  return {
+    mode: "pdf-balance",
+    metadata,
+    venituriLunare,
+    cheltuieliLunare,
+    rezultatLunar,
+    rezultatCumulat,
+    activeImobilizateNet,
+    stocuriNet,
+    creanteClientiNet,
+    numerarBanciCasa,
+    avansuriTrezorerie,
+    datoriiFurnizori,
+    datoriiSalariale,
+    datoriiFiscale,
+    crediteScurte,
+    capitaluriProprii,
+    totalActiveEstimate,
+    totalDatoriiEstimate,
+    trezorerieNeta,
+    marjaLunara,
+    gradIndatorare,
+    lichiditateImediata,
+    cheltMarfaLunar,
+    cheltPersonalLunar,
+    cheltServiciiLunar,
+    cheltDobanziLunar,
+    cheltTaxeLunar,
+    cashOutLunarProxy,
+    dividendeDePlataSold,
+    platiDividendeLunare,
+    decontariAsociatiSold,
+    creanteDividende463,
+    impozitDividendeSold,
+    impozitProfitLunar,
+    requestedElements,
+    topClienti,
+    topFurnizori,
+    alerts,
+    foundRows: standardValues,
+    missingIndicators: []
+  };
+}
+
+function extractPdfBalanceMetadata(rows) {
+  let company = "";
+  let period = "";
+
+  rows.forEach((row) => {
+    const firstCell = String((row.cells && row.cells[0]) || "").trim();
+    const fullText = (row.cells || []).join(" ");
+
+    if (!company && /srl|sa|pfa/i.test(firstCell) && firstCell.length < 80) {
+      company = firstCell;
+    }
+
+    if (!period && /perioada/i.test(fullText)) {
+      period = fullText.replace(/.*perioada\s*:?/i, "").trim();
+    }
+  });
+
+  return { company, period };
+}
+
+function extractPdfBalanceAccounts(rows) {
+  const headerIndex = rows.findIndex((row) => {
+    const text = normalizeText((row.cells || []).join(" "));
+    return text.includes("simbolcont") && text.includes("soldinitial") && text.includes("soldfinal");
+  });
+
+  if (headerIndex < 0) {
+    return [];
+  }
+
+  const result = [];
+  for (let i = headerIndex + 1; i < rows.length; i += 1) {
+    const cells = rows[i].cells || [];
+    const symbolRaw = String(cells[0] || "").trim();
+    const name = String(cells[1] || "").trim();
+    const classSymbol = symbolRaw.match(/^CLASA([1-7])$/i);
+    const symbol = classSymbol ? `CLASA${classSymbol[1]}` : normalizeAccountSymbol(symbolRaw);
+
+    if (!symbol || (!/^\d{3,4}(\.\d+)?$/.test(symbol) && !/^CLASA[1-7]$/.test(symbol))) {
+      continue;
+    }
+
+    const soldInitDeb = parseNumber(cells[2]);
+    const soldInitCred = parseNumber(cells[3]);
+    const rulajDeb = parseNumber(cells[4]);
+    const rulajCred = parseNumber(cells[5]);
+    const totalDeb = parseNumber(cells[6]);
+    const totalCred = parseNumber(cells[7]);
+    const soldFinalDeb = parseNumber(cells[8]);
+    const soldFinalCred = parseNumber(cells[9]);
+
+    const allInvalid = [soldInitDeb, soldInitCred, rulajDeb, rulajCred, totalDeb, totalCred, soldFinalDeb, soldFinalCred]
+      .every((value) => !Number.isFinite(value));
+    if (allInvalid) {
+      continue;
+    }
+
+    result.push({
+      symbol,
+      name,
+      soldInitDeb: Number.isFinite(soldInitDeb) ? soldInitDeb : 0,
+      soldInitCred: Number.isFinite(soldInitCred) ? soldInitCred : 0,
+      rulajDeb: Number.isFinite(rulajDeb) ? rulajDeb : 0,
+      rulajCred: Number.isFinite(rulajCred) ? rulajCred : 0,
+      totalDeb: Number.isFinite(totalDeb) ? totalDeb : 0,
+      totalCred: Number.isFinite(totalCred) ? totalCred : 0,
+      soldFinalDeb: Number.isFinite(soldFinalDeb) ? soldFinalDeb : 0,
+      soldFinalCred: Number.isFinite(soldFinalCred) ? soldFinalCred : 0
+    });
+  }
+
+  return result;
+}
+
+function toCanonicalRows(rows) {
+  const bySymbol = new Map();
+
+  rows.forEach((row) => {
+    const key = row.symbol;
+    const score = row.totalDeb + row.totalCred;
+    const existing = bySymbol.get(key);
+
+    if (!existing || score > existing.score) {
+      bySymbol.set(key, { score, row });
+    }
+  });
+
+  return [...bySymbol.values()].map((entry) => entry.row);
+}
+
+function normalizeAccountSymbol(value) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .replace(/,+/g, ".")
+    .replace(/[^0-9.]/g, "")
+    .replace(/\.{2,}/g, ".")
+    .replace(/^\./, "")
+    .replace(/\.$/, "");
+}
+
+function sumByClassRulaj(rows, classPrefix, side) {
+  const classRow = rows.find((row) => row.symbol === `CLASA${classPrefix}`);
+  if (classRow) {
+    return side === "debit" ? classRow.rulajDeb : classRow.rulajCred;
+  }
+
+  return rows
+    .filter((row) => row.symbol.startsWith(String(classPrefix)) && !row.symbol.startsWith("CLASA"))
+    .reduce((sum, row) => sum + (side === "debit" ? row.rulajDeb : row.rulajCred), 0);
+}
+
+function sumByPrefixRulaj(rows, prefixes, side) {
+  return prefixes.reduce((sum, prefix) => {
+    const selected = resolveRowsForPrefix(rows, String(prefix));
+    return sum + selected.reduce((acc, row) => acc + (side === "debit" ? row.rulajDeb : row.rulajCred), 0);
+  }, 0);
+}
+
+function netByPrefixFinal(rows, prefixes, side) {
+  const selectedRows = prefixes.flatMap((prefix) => resolveRowsForPrefix(rows, String(prefix)));
+  const uniqueRows = uniqueBySymbol(selectedRows);
+
+  const { deb, cred } = uniqueRows
+    .reduce((acc, row) => {
+      acc.deb += row.soldFinalDeb;
+      acc.cred += row.soldFinalCred;
+      return acc;
+    }, { deb: 0, cred: 0 });
+
+  return side === "debit" ? Math.max(deb - cred, 0) : Math.max(cred - deb, 0);
+}
+
+function topAccounts(rows, prefixes, field, limit, excludeGenericNames = false) {
+  return rows
+    .filter((row) => prefixes.some((prefix) => row.symbol.startsWith(String(prefix))))
+    .filter((row) => !excludeGenericNames || !/^(furnizori|clienti|casa|conturi?\s+la\s+banci)/i.test((row.name || "").trim()))
+    .map((row) => ({ symbol: row.symbol, name: row.name, value: row[field] || 0 }))
+    .filter((row) => row.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, limit);
+}
+
+function resolveRowsForPrefix(rows, prefix) {
+  const exact = rows.filter((row) => row.symbol === prefix);
+  if (exact.length) {
+    return exact;
+  }
+
+  const candidates = rows.filter((row) => row.symbol.startsWith(prefix));
+  if (!candidates.length) {
+    return [];
+  }
+
+  return candidates.filter((row) => {
+    return !candidates.some((other) => other.symbol !== row.symbol
+      && row.symbol.startsWith(other.symbol)
+      && other.symbol.length < row.symbol.length);
+  });
+}
+
+function uniqueBySymbol(rows) {
+  const map = new Map();
+
+  rows.forEach((row) => {
+    if (!map.has(row.symbol)) {
+      map.set(row.symbol, row);
+    }
+  });
+
+  return [...map.values()];
 }
 
 function computeAccountBalanceMetrics(rows, standardValues) {
@@ -280,6 +868,11 @@ function computeAccountBalanceMetrics(rows, standardValues) {
   const profitYtd = Number.isFinite(profitYtdRaw) && profitYtdRaw !== 0
     ? profitYtdRaw
     : totalVenituriYtd - totalCheltuieliYtd;
+  const requestedElements = buildRequestedElementsAccountAnalysis(yearRows, monthLabels, {
+    totalVenituri: totalVenituriYtd,
+    totalCheltuieli: totalCheltuieliYtd,
+    rezultat121: profitYtd
+  });
 
   const lastMonthWithData = latestNonZeroPoint(venituriSeries) || latestNonZeroPoint(cheltuieliSeries) || latestNonZeroPoint(profitSeries);
   const activeMonthCount = getActiveMonthCount(venituriSeries, cheltuieliSeries, profitSeries, lastMonthWithData);
@@ -372,6 +965,7 @@ function computeAccountBalanceMetrics(rows, standardValues) {
     cheltuieliProtocol,
     combustibil,
     utilitati,
+    requestedElements,
     dividendeDePlata,
     miscariAsociati,
     avansuriTrezorerie,
@@ -644,6 +1238,195 @@ function sumSeriesBySymbols(rows, monthLabels, symbolPrefixes) {
     total,
     matchedSymbols: [...new Set(matchedSymbols)]
   };
+}
+
+function normalizeAccountingSymbol(symbol) {
+  return String(symbol || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/,+/g, ".");
+}
+
+function sumSeriesBySymbolRules(rows, monthLabels, rules) {
+  let total = 0;
+
+  rows.forEach((row) => {
+    const rowSymbol = normalizeAccountingSymbol((row.cells && row.cells[0]) || "");
+    if (!rowSymbol) {
+      return;
+    }
+
+    const isMatch = rules.some((rule) => {
+      const target = normalizeAccountingSymbol(rule.value);
+      if (!target) {
+        return false;
+      }
+
+      if (rule.mode === "exact") {
+        return rowSymbol === target;
+      }
+
+      return rowSymbol.startsWith(target);
+    });
+
+    if (!isMatch) {
+      return;
+    }
+
+    total += sumSeries(extractSeriesFromRow(row, monthLabels));
+  });
+
+  return total;
+}
+
+function buildRequestedElementsAccountAnalysis(rows, monthLabels, totals) {
+  const items = [
+    { label: "121 Profit sau pierdere", total: totals.rezultat121 || 0 },
+    { label: "Total venituri", total: totals.totalVenituri || 0 },
+    { label: "Total cheltuieli", total: totals.totalCheltuieli || 0 },
+    { label: "707 Vanzari marfa", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "707", mode: "prefix" }]) },
+    { label: "607 Cheltuieli marfa", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "607", mode: "prefix" }]) },
+    { label: "709 Reduceri acordate clientilor", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "709", mode: "prefix" }]) },
+    { label: "609 Discount marfa", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "609", mode: "prefix" }]) },
+    { label: "704 Venituri din servicii prestate", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "704", mode: "prefix" }]) },
+    { label: "706 Venituri din chirie", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "706", mode: "prefix" }]) },
+    { label: "7583 Venituri din vanzari active", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "7583", mode: "prefix" }]) },
+    { label: "7651 Diferente de curs valutar (venit)", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "7651", mode: "prefix" }]) },
+    { label: "7588 Venituri din inchidere sold furnizori", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "7588", mode: "prefix" }]) },
+    { label: "6022 Cheltuieli combustibili", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "6022", mode: "prefix" }]) },
+    { label: "6024 Cheltuieli piese de schimb", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "6024", mode: "prefix" }]) },
+    { label: "6028 Cheltuieli alte materiale consumabile", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "6028", mode: "prefix" }]) },
+    { label: "603 Cheltuieli materiale de natura obiectelor de inventar", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "603", mode: "prefix" }]) },
+    { label: "604 Cheltuieli materiale nestocate", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "604", mode: "prefix" }]) },
+    { label: "605 Cheltuieli energie si apa", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "605", mode: "prefix" }]) },
+    { label: "611 Cheltuieli cu intretinerea si reparatiile", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "611", mode: "prefix" }]) },
+    { label: "612 Cheltuieli redevente/locatii/chirii", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "612", mode: "prefix" }]) },
+    { label: "613 Cheltuieli prime de asigurare", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "613", mode: "prefix" }]) },
+    { label: "622 Cheltuieli comisioane si onorarii", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "622", mode: "prefix" }]) },
+    { label: "623 Cheltuieli protocol/reclama/publicitate", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "623", mode: "prefix" }]) },
+    { label: "624 Cheltuieli transport bunuri si personal", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "624", mode: "prefix" }]) },
+    { label: "625 Cheltuieli deplasari/detasari/transferari", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "625", mode: "prefix" }]) },
+    { label: "626 Cheltuieli postale si telecomunicatii", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "626", mode: "prefix" }]) },
+    { label: "627 Cheltuieli servicii bancare", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "627", mode: "prefix" }]) },
+    { label: "628 Alte cheltuieli cu servicii executate de terti", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "628", mode: "prefix" }]) },
+    { label: "635 Cheltuieli cu alte impozite/taxe", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "635", mode: "prefix" }]) },
+    { label: "641 Cheltuieli cu salariile personalului", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "641", mode: "prefix" }]) },
+    { label: "6458 Alte cheltuieli privind vacante salariati", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "6458", mode: "prefix" }]) },
+    { label: "654 Pierderi din creante si debitori diversi", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "654", mode: "prefix" }]) },
+    { label: "6581.01 Amenzi si penalitati ANAF", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "6581.01", mode: "exact" }]) },
+    { label: "6581.02 Penalitati firme", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "6581.02", mode: "exact" }]) },
+    { label: "6583 Cheltuieli din vanzare imobilizari", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "6583", mode: "prefix" }]) },
+    { label: "6584 Cheltuieli cu sponsorizari/donatii", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "6584", mode: "prefix" }]) },
+    { label: "6588 Alte cheltuieli de exploatare", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "6588", mode: "prefix" }]) },
+    { label: "665 Cheltuieli din diferente de curs valutar", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "665", mode: "prefix" }]) },
+    { label: "666 Cheltuieli privind dobanzile", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "666", mode: "prefix" }]) },
+    { label: "6811 Cheltuieli cu amortizarea imobilizarilor", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "6811", mode: "prefix" }]) },
+    { label: "691 Cheltuieli cu impozitul pe profit", total: sumSeriesBySymbolRules(rows, monthLabels, [{ value: "691", mode: "prefix" }]) }
+  ];
+
+  const sold707 = items.find((item) => item.label.startsWith("707 "))?.total || 0;
+  const sold607 = items.find((item) => item.label.startsWith("607 "))?.total || 0;
+  const sold709 = items.find((item) => item.label.startsWith("709 "))?.total || 0;
+  const sold609 = items.find((item) => item.label.startsWith("609 "))?.total || 0;
+  const totalCheltDiverseByLabel = sumSeriesByLabels(rows, monthLabels, ["total cheltuieli diverse"]).total;
+  const totalCheltDiverseFallback = sumSeriesBySymbolRules(rows, monthLabels, [{ value: "658", mode: "prefix" }]);
+
+  items.splice(7, 0, {
+    label: "Adaos marfa (707 - 607 - 709 + 609)",
+    total: sold707 - sold607 - sold709 + sold609
+  });
+
+  items.push({
+    label: "Total cheltuieli diverse",
+    total: totalCheltDiverseByLabel !== 0 ? totalCheltDiverseByLabel : totalCheltDiverseFallback
+  });
+
+  return items;
+}
+
+function sumPdfBySymbolRules(rows, rules) {
+  return rules.reduce((sum, rule) => {
+    const symbol = normalizeAccountingSymbol(rule.value);
+    if (!symbol) {
+      return sum;
+    }
+
+    const matchedRows = rule.mode === "exact"
+      ? rows.filter((row) => normalizeAccountingSymbol(row.symbol) === symbol)
+      : resolveRowsForPrefix(rows, symbol);
+
+    return sum + matchedRows.reduce((acc, row) => {
+      if (rule.side === "credit") {
+        return acc + row.rulajCred;
+      }
+
+      return acc + row.rulajDeb;
+    }, 0);
+  }, 0);
+}
+
+function buildRequestedElementsPdfAnalysis(rows, totals) {
+  const items = [
+    { label: "121 Profit sau pierdere", total: totals.rezultat121 || 0 },
+    { label: "Total venituri", total: totals.totalVenituri || 0 },
+    { label: "Total cheltuieli", total: totals.totalCheltuieli || 0 },
+    { label: "707 Vanzari marfa", total: sumPdfBySymbolRules(rows, [{ value: "707", mode: "prefix", side: "credit" }]) },
+    { label: "607 Cheltuieli marfa", total: sumPdfBySymbolRules(rows, [{ value: "607", mode: "prefix", side: "debit" }]) },
+    { label: "709 Reduceri acordate clientilor", total: sumPdfBySymbolRules(rows, [{ value: "709", mode: "prefix", side: "credit" }]) },
+    { label: "609 Discount marfa", total: sumPdfBySymbolRules(rows, [{ value: "609", mode: "prefix", side: "credit" }]) },
+    { label: "704 Venituri din servicii prestate", total: sumPdfBySymbolRules(rows, [{ value: "704", mode: "prefix", side: "credit" }]) },
+    { label: "706 Venituri din chirie", total: sumPdfBySymbolRules(rows, [{ value: "706", mode: "prefix", side: "credit" }]) },
+    { label: "7583 Venituri din vanzari active", total: sumPdfBySymbolRules(rows, [{ value: "7583", mode: "prefix", side: "credit" }]) },
+    { label: "7651 Diferente de curs valutar (venit)", total: sumPdfBySymbolRules(rows, [{ value: "7651", mode: "prefix", side: "credit" }]) },
+    { label: "7588 Venituri din inchidere sold furnizori", total: sumPdfBySymbolRules(rows, [{ value: "7588", mode: "prefix", side: "credit" }]) },
+    { label: "6022 Cheltuieli combustibili", total: sumPdfBySymbolRules(rows, [{ value: "6022", mode: "prefix", side: "debit" }]) },
+    { label: "6024 Cheltuieli piese de schimb", total: sumPdfBySymbolRules(rows, [{ value: "6024", mode: "prefix", side: "debit" }]) },
+    { label: "6028 Cheltuieli alte materiale consumabile", total: sumPdfBySymbolRules(rows, [{ value: "6028", mode: "prefix", side: "debit" }]) },
+    { label: "603 Cheltuieli materiale de natura obiectelor de inventar", total: sumPdfBySymbolRules(rows, [{ value: "603", mode: "prefix", side: "debit" }]) },
+    { label: "604 Cheltuieli materiale nestocate", total: sumPdfBySymbolRules(rows, [{ value: "604", mode: "prefix", side: "debit" }]) },
+    { label: "605 Cheltuieli energie si apa", total: sumPdfBySymbolRules(rows, [{ value: "605", mode: "prefix", side: "debit" }]) },
+    { label: "611 Cheltuieli cu intretinerea si reparatiile", total: sumPdfBySymbolRules(rows, [{ value: "611", mode: "prefix", side: "debit" }]) },
+    { label: "612 Cheltuieli redevente/locatii/chirii", total: sumPdfBySymbolRules(rows, [{ value: "612", mode: "prefix", side: "debit" }]) },
+    { label: "613 Cheltuieli prime de asigurare", total: sumPdfBySymbolRules(rows, [{ value: "613", mode: "prefix", side: "debit" }]) },
+    { label: "622 Cheltuieli comisioane si onorarii", total: sumPdfBySymbolRules(rows, [{ value: "622", mode: "prefix", side: "debit" }]) },
+    { label: "623 Cheltuieli protocol/reclama/publicitate", total: sumPdfBySymbolRules(rows, [{ value: "623", mode: "prefix", side: "debit" }]) },
+    { label: "624 Cheltuieli transport bunuri si personal", total: sumPdfBySymbolRules(rows, [{ value: "624", mode: "prefix", side: "debit" }]) },
+    { label: "625 Cheltuieli deplasari/detasari/transferari", total: sumPdfBySymbolRules(rows, [{ value: "625", mode: "prefix", side: "debit" }]) },
+    { label: "626 Cheltuieli postale si telecomunicatii", total: sumPdfBySymbolRules(rows, [{ value: "626", mode: "prefix", side: "debit" }]) },
+    { label: "627 Cheltuieli servicii bancare", total: sumPdfBySymbolRules(rows, [{ value: "627", mode: "prefix", side: "debit" }]) },
+    { label: "628 Alte cheltuieli cu servicii executate de terti", total: sumPdfBySymbolRules(rows, [{ value: "628", mode: "prefix", side: "debit" }]) },
+    { label: "635 Cheltuieli cu alte impozite/taxe", total: sumPdfBySymbolRules(rows, [{ value: "635", mode: "prefix", side: "debit" }]) },
+    { label: "641 Cheltuieli cu salariile personalului", total: sumPdfBySymbolRules(rows, [{ value: "641", mode: "prefix", side: "debit" }]) },
+    { label: "6458 Alte cheltuieli privind vacante salariati", total: sumPdfBySymbolRules(rows, [{ value: "6458", mode: "prefix", side: "debit" }]) },
+    { label: "654 Pierderi din creante si debitori diversi", total: sumPdfBySymbolRules(rows, [{ value: "654", mode: "prefix", side: "debit" }]) },
+    { label: "6581.01 Amenzi si penalitati ANAF", total: sumPdfBySymbolRules(rows, [{ value: "6581.01", mode: "exact", side: "debit" }]) },
+    { label: "6581.02 Penalitati firme", total: sumPdfBySymbolRules(rows, [{ value: "6581.02", mode: "exact", side: "debit" }]) },
+    { label: "6583 Cheltuieli din vanzare imobilizari", total: sumPdfBySymbolRules(rows, [{ value: "6583", mode: "prefix", side: "debit" }]) },
+    { label: "6584 Cheltuieli cu sponsorizari/donatii", total: sumPdfBySymbolRules(rows, [{ value: "6584", mode: "prefix", side: "debit" }]) },
+    { label: "6588 Alte cheltuieli de exploatare", total: sumPdfBySymbolRules(rows, [{ value: "6588", mode: "prefix", side: "debit" }]) },
+    { label: "665 Cheltuieli din diferente de curs valutar", total: sumPdfBySymbolRules(rows, [{ value: "665", mode: "prefix", side: "debit" }]) },
+    { label: "666 Cheltuieli privind dobanzile", total: sumPdfBySymbolRules(rows, [{ value: "666", mode: "prefix", side: "debit" }]) },
+    { label: "6811 Cheltuieli cu amortizarea imobilizarilor", total: sumPdfBySymbolRules(rows, [{ value: "6811", mode: "prefix", side: "debit" }]) },
+    { label: "691 Cheltuieli cu impozitul pe profit", total: sumPdfBySymbolRules(rows, [{ value: "691", mode: "prefix", side: "debit" }]) }
+  ];
+
+  const sold707 = items.find((item) => item.label.startsWith("707 "))?.total || 0;
+  const sold607 = items.find((item) => item.label.startsWith("607 "))?.total || 0;
+  const sold709 = items.find((item) => item.label.startsWith("709 "))?.total || 0;
+  const sold609 = items.find((item) => item.label.startsWith("609 "))?.total || 0;
+
+  items.splice(7, 0, {
+    label: "Adaos marfa (707 - 607 - 709 + 609)",
+    total: sold707 - sold607 - sold709 + sold609
+  });
+
+  items.push({
+    label: "Total cheltuieli diverse",
+    total: sumPdfBySymbolRules(rows, [{ value: "658", mode: "prefix", side: "debit" }])
+  });
+
+  return items;
 }
 
 function sumSeriesByLabels(rows, monthLabels, labelHints) {
@@ -942,7 +1725,199 @@ function clearCharts() {
   }
 }
 
+function buildRequestedElementLines(items) {
+  const categoryOrder = [
+    "rezultat",
+    "venituri",
+    "costMarfa",
+    "opex",
+    "financiar",
+    "fiscal",
+    "diverse",
+    "altele"
+  ];
+
+  const categoryTitles = {
+    rezultat: "A) Rezultat si totaluri",
+    venituri: "B) Venituri comerciale si alte venituri",
+    costMarfa: "C) Cost marfa, reduceri si adaos",
+    opex: "D) Cheltuieli operationale",
+    financiar: "E) Cheltuieli financiare",
+    fiscal: "F) Cheltuieli fiscale si conformare",
+    diverse: "G) Cheltuieli diverse",
+    altele: "H) Alte elemente"
+  };
+
+  const grouped = new Map(categoryOrder.map((key) => [key, []]));
+
+  (items || []).forEach((item) => {
+    const category = classifyRequestedElement(item.label);
+    grouped.get(category).push(item);
+  });
+
+  const lines = [];
+  categoryOrder.forEach((key) => {
+    const categoryItems = grouped.get(key);
+    if (!categoryItems || !categoryItems.length) {
+      return;
+    }
+
+    lines.push(categoryTitles[key]);
+    categoryItems.forEach((item) => {
+      lines.push(`- ${item.label}: ${formatCurrency(item.total)}`);
+    });
+    lines.push("");
+  });
+
+  if (lines.length && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+
+  return lines;
+}
+
+function classifyRequestedElement(label) {
+  const text = String(label || "").toLowerCase();
+
+  if (text.startsWith("total cheltuieli diverse")) {
+    return "diverse";
+  }
+
+  if (text.startsWith("121 ") || text.startsWith("total venituri") || text.startsWith("total cheltuieli")) {
+    return "rezultat";
+  }
+
+  if (text.includes("adaos marfa") || text.startsWith("607 ") || text.startsWith("609 ") || text.startsWith("709 ")) {
+    return "costMarfa";
+  }
+
+  if (text.startsWith("707 ") || text.startsWith("704 ") || text.startsWith("706 ") || text.startsWith("7583 ") || text.startsWith("7651 ") || text.startsWith("7588 ")) {
+    return "venituri";
+  }
+
+  if (text.startsWith("6022 ") || text.startsWith("6024 ") || text.startsWith("6028 ")
+      || text.startsWith("603 ") || text.startsWith("604 ") || text.startsWith("605 ")
+      || text.startsWith("611 ") || text.startsWith("612 ") || text.startsWith("613 ")
+      || text.startsWith("622 ") || text.startsWith("623 ") || text.startsWith("624 ")
+      || text.startsWith("625 ") || text.startsWith("626 ") || text.startsWith("627 ")
+      || text.startsWith("628 ") || text.startsWith("641 ") || text.startsWith("6458 ")
+      || text.startsWith("6811 ")) {
+    return "opex";
+  }
+
+  if (text.startsWith("665 ") || text.startsWith("666 ")) {
+    return "financiar";
+  }
+
+  if (text.startsWith("635 ") || text.startsWith("691 ") || text.startsWith("6581.01 ") || text.startsWith("6581.02 ")) {
+    return "fiscal";
+  }
+
+  if (text.startsWith("654 ") || text.startsWith("6583 ") || text.startsWith("6584 ") || text.startsWith("6588 ")) {
+    return "diverse";
+  }
+
+  return "altele";
+}
+
 function buildReport({ companyName, adminName, reportPeriod, metrics }) {
+  if (metrics.mode === "pdf-balance") {
+    if (metrics.error) {
+      return [
+        `Stimate/Stimata ${adminName},`,
+        "",
+        `Nu am putut genera analiza automata pentru ${companyName}, perioada ${reportPeriod}.`,
+        `Motiv: ${metrics.error}`,
+        "",
+        "Cu stima,",
+        "Sistem automat de raportare balanta"
+      ].join("\n");
+    }
+
+    const rezultatLunarText = metrics.rezultatLunar >= 0 ? "profit" : "pierdere";
+    const rezultatCumulatText = metrics.rezultatCumulat >= 0 ? "profit" : "pierdere";
+    const topClienti = metrics.topClienti.length
+      ? metrics.topClienti.map((item, index) => `- ${index + 1}. ${item.symbol} ${item.name}: ${formatCurrency(item.value)}`)
+      : ["- Fara solduri semnificative pe clienti."];
+    const topFurnizori = metrics.topFurnizori.length
+      ? metrics.topFurnizori.map((item, index) => `- ${index + 1}. ${item.symbol} ${item.name}: ${formatCurrency(item.value)}`)
+      : ["- Fara solduri semnificative pe furnizori."];
+    const alertLines = metrics.alerts.length
+      ? metrics.alerts.map((line) => `- ${line}`)
+      : ["- Nu au fost identificate alerte majore pe regulile automate configurate."];
+    const requestedElementLines = buildRequestedElementLines(metrics.requestedElements);
+
+    return [
+      `Stimate/Stimata ${adminName},`,
+      "",
+      `Mai jos aveti analiza financiara pentru ${companyName}, perioada ${reportPeriod}, pe baza balantei de verificare PDF/XLS.`,
+      `- Companie identificata in document: ${metrics.metadata.company || "n/a"}`,
+      `- Perioada identificata in document: ${metrics.metadata.period || "n/a"}`,
+      "",
+      "1) Performanta perioada curenta",
+      `- Venituri lunare estimate (clasa 7): ${formatCurrency(metrics.venituriLunare)}`,
+      `- Cheltuieli lunare estimate (clasa 6): ${formatCurrency(metrics.cheltuieliLunare)}`,
+      `- Rezultat lunar (${rezultatLunarText}): ${formatCurrency(metrics.rezultatLunar)}`,
+      `- Rezultat cumulat din cont 121 (${rezultatCumulatText}): ${formatCurrency(metrics.rezultatCumulat)}`,
+      `- Marja lunara estimata: ${formatPercent(metrics.marjaLunara)}`,
+      "",
+      "2) Pozitie financiara estimata (sold final)",
+      `- Active imobilizate nete: ${formatCurrency(metrics.activeImobilizateNet)}`,
+      `- Stocuri nete: ${formatCurrency(metrics.stocuriNet)}`,
+      `- Creante clienti nete: ${formatCurrency(metrics.creanteClientiNet)}`,
+      `- Numerar si disponibilitati (banci + casa): ${formatCurrency(metrics.numerarBanciCasa)}`,
+      `- Avansuri de trezorerie: ${formatCurrency(metrics.avansuriTrezorerie)}`,
+      `- Datorii furnizori: ${formatCurrency(metrics.datoriiFurnizori)}`,
+      `- Datorii fiscale: ${formatCurrency(metrics.datoriiFiscale)}`,
+      `- Datorii salariale: ${formatCurrency(metrics.datoriiSalariale)}`,
+      `- Credite pe termen scurt: ${formatCurrency(metrics.crediteScurte)}`,
+      `- Capitaluri proprii estimate: ${formatCurrency(metrics.capitaluriProprii)}`,
+      `- Trezorerie neta (cash - credite scurte): ${formatCurrency(metrics.trezorerieNeta)}`,
+      "",
+      "3) Indicatori de risc si lichiditate",
+      `- Lichiditate imediata ((cash + creante) / datorii curente): ${formatRatio(metrics.lichiditateImediata)}`,
+      `- Grad de indatorare (datorii estimate / capitaluri proprii): ${formatRatio(metrics.gradIndatorare)}`,
+      `- Raport active estimate / datorii estimate: ${formatRatio(safeDivide(metrics.totalActiveEstimate, metrics.totalDatoriiEstimate))}`,
+      "",
+      "4) Iesiri de bani si fiscalitate (proxy)",
+      `- Cheltuieli marfa (607) - rulaj lunar: ${formatCurrency(metrics.cheltMarfaLunar)}`,
+      `- Cheltuieli personal (641-646) - rulaj lunar: ${formatCurrency(metrics.cheltPersonalLunar)}`,
+      `- Cheltuieli servicii (611-628) - rulaj lunar: ${formatCurrency(metrics.cheltServiciiLunar)}`,
+      `- Cheltuieli dobanzi (666) - rulaj lunar: ${formatCurrency(metrics.cheltDobanziLunar)}`,
+      `- Taxe si impozite (635/691/698) - rulaj lunar: ${formatCurrency(metrics.cheltTaxeLunar)}`,
+      `- Cash-out lunar estimat (proxy): ${formatCurrency(metrics.cashOutLunarProxy)}`,
+      `- Impozit pe profit (691) lunar: ${formatCurrency(metrics.impozitProfitLunar)}`,
+      `- Impozit pe dividende (446.01) sold: ${formatCurrency(metrics.impozitDividendeSold)}`,
+      "",
+      "5) Dividende si relatia cu asociatii",
+      `- Dividende de plata (457) sold final: ${formatCurrency(metrics.dividendeDePlataSold)}`,
+      `- Plati/reduceri dividende in perioada (457 rulaj debitor): ${formatCurrency(metrics.platiDividendeLunare)}`,
+      `- Decontari cu asociatii (455/456) sold: ${formatCurrency(metrics.decontariAsociatiSold)}`,
+      `- Creante din dividende repartizate (463) sold: ${formatCurrency(metrics.creanteDividende463)}`,
+      "",
+      "6) Top expuneri clienti (sold final debitor)",
+      ...topClienti,
+      "",
+      "7) Top expuneri furnizori (sold final creditor)",
+      ...topFurnizori,
+      "",
+      "8) Alerte automate",
+      ...alertLines,
+
+      "",
+      "9) Analiza pe elementele solicitate",
+      ...requestedElementLines,
+      "",
+      "Observatii:",
+      "- Analiza este construita pe structura balantei de verificare (solduri si rulaje), nu pe situatii financiare anuale complete.",
+      "- Interpretarea dividendelor necesita validare cu documente juridice si fiscale (AGA, declaratii, scadente).",
+      "- Pentru decizii finale, recomand validare cu contabilul societatii.",
+      "",
+      "Cu stima,",
+      "Sistem automat de raportare balanta"
+    ].join("\n");
+  }
+
   if (metrics.mode === "account-balance") {
     if (metrics.error) {
       return [
@@ -967,6 +1942,7 @@ function buildReport({ companyName, adminName, reportPeriod, metrics }) {
     const alertLines = metrics.alerts.length
       ? metrics.alerts.map((line) => `- ${line}`)
       : ["- Nu au fost identificate alerte majore pe regulile automate configurate."];
+    const requestedElementLines = buildRequestedElementLines(metrics.requestedElements);
 
     return [
       `Stimate/Stimata ${adminName},`,
@@ -1020,7 +1996,10 @@ function buildReport({ companyName, adminName, reportPeriod, metrics }) {
       `- Luna cu cel mai bun rezultat (cont 121): ${metrics.bestMonth ? `${metrics.bestMonth.month} (${formatCurrency(metrics.bestMonth.value)})` : "n/a"}`,
       `- Luna cu cel mai slab rezultat (cont 121): ${metrics.worstMonth ? `${metrics.worstMonth.month} (${formatCurrency(metrics.worstMonth.value)})` : "n/a"}`,
       "",
-      "8) Alerte automate",
+      "8) Analiza pe elementele solicitate",
+      ...requestedElementLines,
+      "",
+      "9) Alerte automate",
       ...alertLines,
       "",
       "Observatii:",

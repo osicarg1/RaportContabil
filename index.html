@@ -9,6 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -16,7 +17,7 @@
     <section class="panel panel-left">
       <h1>Generator email/raport balanta pe conturi</h1>
       <p class="subtitle">
-        Incarca un fisier de balanta pe conturi (CSV/XLS/XLSX) si obtine instant un rezumat executiv pentru administrator.
+        Incarca un fisier de balanta pe conturi (CSV/XLS/XLSX/PDF) si obtine instant un rezumat executiv pentru administrator.
       </p>
 
       <form id="input-form" class="form-grid">
@@ -32,7 +33,7 @@
 
         <label>
           Email administrator
-          <input id="adminEmail" type="email" placeholder="Ex: administrator@firma.ro" required />
+          <input id="adminEmail" type="email" placeholder="Ex: administrator@firma.ro" />
         </label>
 
         <label>
@@ -42,7 +43,7 @@
 
         <label class="full">
           Fisier balanta pe conturi
-          <input id="balanceFile" type="file" accept=".csv,.xlsx,.xls" required />
+          <input id="balanceFile" type="file" accept=".csv,.xlsx,.xls,.pdf" required />
         </label>
 
         <div class="actions full">
@@ -86,6 +87,6 @@
     </section>
   </main>
 
-  <script src="app.js?v=20260721-3"></script>
+  <script src="app.js?v=20260721-4"></script>
 </body>
 </html>

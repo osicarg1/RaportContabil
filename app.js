@@ -5,6 +5,7 @@ const mailtoLink = document.getElementById("mailtoLink");
 const chartsSection = document.getElementById("chartsSection");
 const yearlyChartCanvas = document.getElementById("yearlyChart");
 const monthlyChartCanvas = document.getElementById("monthlyChart");
+const reportPreview = document.getElementById("reportPreview");
 const companyNameInput = document.getElementById("companyName");
 const adminNameInput = document.getElementById("adminName");
 const adminEmailInput = document.getElementById("adminEmail");
@@ -95,6 +96,7 @@ form.addEventListener("submit", async (event) => {
     const report = buildReport({ companyName, adminName, reportPeriod, metrics });
 
     reportOutput.value = report;
+    renderReportPreview(report, metrics);
     copyBtn.disabled = false;
     updateMailto(adminEmail, companyName, reportPeriod, report);
     renderEvolutionCharts(metrics);
@@ -139,6 +141,87 @@ function updateMailto(email, companyName, reportPeriod, report) {
   mailtoLink.href = href;
   mailtoLink.classList.remove("disabled");
   mailtoLink.setAttribute("aria-disabled", "false");
+}
+
+function renderReportPreview(report, metrics) {
+  if (!reportPreview) {
+    return;
+  }
+
+  const lines = String(report || "").split("\n");
+  if (!lines.length || !lines.some((line) => line.trim())) {
+    reportPreview.innerHTML = "";
+    reportPreview.classList.add("is-empty");
+    return;
+  }
+
+  const html = [];
+  let inAlertsSection = false;
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      html.push('<p class="report-line">&nbsp;</p>');
+      return;
+    }
+
+    if (/^\d+\)\s+alerte\s+automate/i.test(trimmed)) {
+      inAlertsSection = true;
+    } else if (/^\d+\)\s+/i.test(trimmed) && !/^\d+\)\s+alerte\s+automate/i.test(trimmed)) {
+      inAlertsSection = false;
+    }
+
+    const important = isImportantReportLine(trimmed, metrics, inAlertsSection);
+    const sectionClass = /^\d+\)\s+/i.test(trimmed) ? " section" : "";
+    const importantClass = important ? " important" : "";
+    html.push(`<p class="report-line${sectionClass}${importantClass}">${escapeHtml(trimmed)}</p>`);
+  });
+
+  reportPreview.innerHTML = html.join("");
+  reportPreview.classList.remove("is-empty");
+}
+
+function isImportantReportLine(line, metrics, inAlertsSection) {
+  const text = String(line || "");
+
+  if (inAlertsSection && text.startsWith("- ")) {
+    return true;
+  }
+
+  if (/\(pierdere\)/i.test(text)) {
+    return true;
+  }
+
+  if (/[:\s]-\d/.test(text)) {
+    return true;
+  }
+
+  if (/lichiditate imediata/i.test(text) && metrics && metrics.lichiditateImediata !== null && metrics.lichiditateImediata < 1) {
+    return true;
+  }
+
+  if (/grad de indatorare/i.test(text) && metrics && metrics.gradIndatorare !== null && metrics.gradIndatorare > 3) {
+    return true;
+  }
+
+  if (/amenzi|penalitati/i.test(text) && !/:\s*0\s*RON/i.test(text)) {
+    return true;
+  }
+
+  if (/impozit pe dividende|dividende de plata|decontari cu asociatii/i.test(text) && !/:\s*0\s*RON/i.test(text)) {
+    return true;
+  }
+
+  return false;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function getFileCacheKey(file) {
@@ -757,7 +840,18 @@ function netByPrefixFinal(rows, prefixes, side) {
 function topAccounts(rows, prefixes, field, limit, excludeGenericNames = false) {
   return rows
     .filter((row) => prefixes.some((prefix) => row.symbol.startsWith(String(prefix))))
-    .filter((row) => !excludeGenericNames || !/^(furnizori|clienti|casa|conturi?\s+la\s+banci)/i.test((row.name || "").trim()))
+    .filter((row) => {
+      if (!excludeGenericNames) {
+        return true;
+      }
+
+      const name = String(row.name || "").trim();
+      if (!name || /^[\W_]+$/.test(name)) {
+        return false;
+      }
+
+      return !/^(furnizori|clienti|casa|conturi?\s+la\s+banci)/i.test(name);
+    })
     .map((row) => ({ symbol: row.symbol, name: row.name, value: row[field] || 0 }))
     .filter((row) => row.value > 0)
     .sort((a, b) => b.value - a.value)
@@ -1837,10 +1931,16 @@ function buildReport({ companyName, adminName, reportPeriod, metrics }) {
     const rezultatLunarText = metrics.rezultatLunar >= 0 ? "profit" : "pierdere";
     const rezultatCumulatText = metrics.rezultatCumulat >= 0 ? "profit" : "pierdere";
     const topClienti = metrics.topClienti.length
-      ? metrics.topClienti.map((item, index) => `- ${index + 1}. ${item.symbol} ${item.name}: ${formatCurrency(item.value)}`)
+      ? metrics.topClienti.map((item, index) => {
+        const displayName = String(item.name || "").trim() || "(denumire neidentificata in PDF)";
+        return `- ${index + 1}. ${item.symbol} ${displayName}: ${formatCurrency(item.value)}`;
+      })
       : ["- Fara solduri semnificative pe clienti."];
     const topFurnizori = metrics.topFurnizori.length
-      ? metrics.topFurnizori.map((item, index) => `- ${index + 1}. ${item.symbol} ${item.name}: ${formatCurrency(item.value)}`)
+      ? metrics.topFurnizori.map((item, index) => {
+        const displayName = String(item.name || "").trim() || "(denumire neidentificata in PDF)";
+        return `- ${index + 1}. ${item.symbol} ${displayName}: ${formatCurrency(item.value)}`;
+      })
       : ["- Fara solduri semnificative pe furnizori."];
     const alertLines = metrics.alerts.length
       ? metrics.alerts.map((line) => `- ${line}`)

@@ -21,6 +21,14 @@ Aplicatie web statica pentru analiza rapida a unei balante pe conturi si generar
   - solvabilitate;
 - genereaza text de email in limba romana si link `mailto:`.
 
+Raportul incepe cu o sectiune **"Rezumat pe intelesul administratorului"** - fara jargon contabil - care contine:
+- verdict pe scurt (profit/pierdere, situatie sanatoasa sau cu risc);
+- "Ce functioneaza bine" - punctele forte identificate automat;
+- "Ce necesita atentie" - riscurile si problemele detectate (lichiditate, indatorare, marja, dividende, amenzi etc.);
+- "Recomandari concrete" - actiuni sugerate pe baza cifrelor gasite.
+
+Sub aceasta sectiune ramane raportul tehnic detaliat (cifre pe conturi, rate financiare), util pentru contabil.
+
 Pentru fisiere de tip balanta pe conturi, aplicatia extrage:
 - total venituri,
 - total cheltuieli,

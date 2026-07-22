@@ -157,6 +157,9 @@ function renderReportPreview(report, metrics) {
 
   const html = [];
   let inAlertsSection = false;
+  const alertsHeaderRegex = /^(?:\d+\)\s+)?(?:alerte\s+automate|ce necesita atentie:?)$/i;
+  const otherHeaderRegex = /^\d+\)\s+/i;
+  const summaryHeaderRegex = /^(REZUMAT PE INTELESUL ADMINISTRATORULUI|Pe scurt:|Ce functioneaza bine:|Recomandari concrete:|--- Detalii tehnice)/i;
 
   lines.forEach((line) => {
     const trimmed = line.trim();
@@ -165,14 +168,14 @@ function renderReportPreview(report, metrics) {
       return;
     }
 
-    if (/^\d+\)\s+alerte\s+automate/i.test(trimmed)) {
+    if (alertsHeaderRegex.test(trimmed)) {
       inAlertsSection = true;
-    } else if (/^\d+\)\s+/i.test(trimmed) && !/^\d+\)\s+alerte\s+automate/i.test(trimmed)) {
+    } else if (otherHeaderRegex.test(trimmed) || summaryHeaderRegex.test(trimmed)) {
       inAlertsSection = false;
     }
 
     const important = isImportantReportLine(trimmed, metrics, inAlertsSection);
-    const sectionClass = /^\d+\)\s+/i.test(trimmed) ? " section" : "";
+    const sectionClass = (otherHeaderRegex.test(trimmed) || summaryHeaderRegex.test(trimmed)) ? " section" : "";
     const importantClass = important ? " important" : "";
     html.push(`<p class="report-line${sectionClass}${importantClass}">${escapeHtml(trimmed)}</p>`);
   });
@@ -1914,6 +1917,271 @@ function classifyRequestedElement(label) {
   return "altele";
 }
 
+function buildAdminSummaryPdfBalance(metrics) {
+  const lines = [];
+  const rezultatPos = metrics.rezultatCumulat >= 0;
+  const pondereMarfaLunar = safeDivide(metrics.cheltMarfaLunar, metrics.cheltuieliLunare);
+
+  lines.push("REZUMAT PE INTELESUL ADMINISTRATORULUI");
+  lines.push("");
+
+  if (rezultatPos && metrics.lichiditateImediata !== null && metrics.lichiditateImediata >= 1) {
+    lines.push("Pe scurt: firma este pe profit si isi poate acoperi datoriile curente din numerar si creante. Situatia generala este sanatoasa, dar exista cateva puncte de atentie mai jos.");
+  } else if (rezultatPos) {
+    lines.push("Pe scurt: firma este pe profit, dar numerarul si creantele disponibile nu acopera integral datoriile curente - exista risc de intarzieri la plati daca nu se urmareste indeaproape incasarea si plata facturilor.");
+  } else {
+    lines.push("Pe scurt: firma inregistreaza pierdere in perioada analizata. Este important sa identificati rapid cauza si sa luati masuri corective.");
+  }
+  lines.push("");
+
+  const good = [];
+  if (rezultatPos) {
+    good.push(`A obtinut profit de ${formatCurrency(metrics.rezultatCumulat)} de la inceputul perioadei contabile.`);
+  }
+  if (metrics.marjaLunara !== null && metrics.marjaLunara >= 0.1) {
+    good.push(`Marja lunara este de ${formatPercent(metrics.marjaLunara)}, un nivel confortabil.`);
+  }
+  if (metrics.lichiditateImediata !== null && metrics.lichiditateImediata >= 1.5) {
+    good.push("Firma are suficient numerar si creante pentru a-si acoperi confortabil datoriile pe termen scurt.");
+  }
+  if (metrics.gradIndatorare !== null && metrics.gradIndatorare <= 1) {
+    good.push("Nivelul de indatorare este scazut fata de capitalurile proprii.");
+  }
+  if (!good.length) {
+    good.push("Nu au fost identificate automat puncte forte clare in aceasta perioada; recomand o discutie cu contabilul pentru context suplimentar.");
+  }
+  lines.push("Ce functioneaza bine:");
+  good.forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+
+  const risks = [];
+  if (!rezultatPos) {
+    risks.push(`Firma inregistreaza pierdere de ${formatCurrency(Math.abs(metrics.rezultatCumulat))} - cheltuielile depasesc veniturile.`);
+  }
+  if (metrics.marjaLunara !== null && metrics.marjaLunara < 0.05) {
+    risks.push(`Marja lunara este de doar ${formatPercent(metrics.marjaLunara)} - profitul ramas dupa cheltuieli este foarte mic, orice crestere de costuri poate genera pierdere.`);
+  }
+  if (metrics.lichiditateImediata !== null && metrics.lichiditateImediata < 1) {
+    risks.push("Numerarul si creantele de incasat NU acopera integral datoriile curente - risc de intarzieri la plata furnizorilor, salariilor sau taxelor.");
+  }
+  if (metrics.gradIndatorare !== null && metrics.gradIndatorare > 2) {
+    risks.push(`Gradul de indatorare este ridicat (${formatRatio(metrics.gradIndatorare)}) - firma depinde puternic de datorii fata de resursele proprii.`);
+  }
+  if (pondereMarfaLunar !== null && pondereMarfaLunar > 0.7) {
+    risks.push(`Costul marfii vandute reprezinta ${formatPercent(pondereMarfaLunar)} din total cheltuieli - profitabilitatea depinde in mare masura de pretul de achizitie si de adaosul comercial practicat.`);
+  }
+  if (metrics.dividendeDePlataSold > 0 || metrics.platiDividendeLunare > 0) {
+    risks.push(`Exista miscari pe dividende (sold de plata: ${formatCurrency(metrics.dividendeDePlataSold)}) - verificati daca sunt acoperite de profitul distribuibil si de hotararile AGA.`);
+  }
+  if (metrics.impozitDividendeSold > 0) {
+    risks.push(`Exista impozit pe dividende neplatit (${formatCurrency(metrics.impozitDividendeSold)}) - verificati termenul de scadenta pentru a evita penalitati.`);
+  }
+  if (!risks.length) {
+    risks.push("Nu au fost identificate riscuri majore pe baza regulilor automate configurate.");
+  }
+  lines.push("Ce necesita atentie:");
+  risks.forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+
+  const recs = [];
+  if (!rezultatPos || (metrics.marjaLunara !== null && metrics.marjaLunara < 0.05)) {
+    recs.push("Analizati structura de preturi si costul marfii/serviciilor pentru a imbunatati marja - fie prin cresterea preturilor, fie prin renegocierea costurilor cu furnizorii.");
+  }
+  if (metrics.lichiditateImediata !== null && metrics.lichiditateImediata < 1) {
+    recs.push("Urmariti saptamanal incasarile de la clienti si esalonati platile catre furnizori pentru a evita blocaje de cash-flow.");
+  }
+  if (metrics.topClienti.length) {
+    recs.push("Verificati soldurile mari la clienti (sectiunea 6 de mai jos) si urmariti activ recuperarea creantelor.");
+  }
+  if (metrics.topFurnizori.length) {
+    recs.push("Verificati soldurile mari la furnizori (sectiunea 7 de mai jos) si planificati platile pentru a evita penalitati de intarziere.");
+  }
+  if (metrics.dividendeDePlataSold > 0) {
+    recs.push("Consultati contabilul inainte de orice noua distribuire de dividende, pentru a confirma ca profitul distribuibil o permite.");
+  }
+  if (!recs.length) {
+    recs.push("Continuati monitorizarea lunara a indicatorilor de mai jos pentru a mentine situatia financiara sanatoasa.");
+  }
+  lines.push("Recomandari concrete:");
+  recs.forEach((item) => lines.push(`- ${item}`));
+
+  return lines;
+}
+
+function buildAdminSummaryAccountBalance(metrics) {
+  const lines = [];
+  const rezultatPos = metrics.profitYtd >= 0;
+  const cheltuieliCrescMaiRepede = metrics.crestereCheltuieliYoY !== null
+    && metrics.crestereVenituriYoY !== null
+    && metrics.crestereCheltuieliYoY > metrics.crestereVenituriYoY;
+
+  lines.push("REZUMAT PE INTELESUL ADMINISTRATORULUI");
+  lines.push("");
+
+  if (rezultatPos && metrics.marjaNeta !== null && metrics.marjaNeta >= 0.05) {
+    lines.push("Pe scurt: firma este pe profit, cu o marja rezonabila. Situatia generala este sanatoasa, dar verificati punctele de atentie de mai jos.");
+  } else if (rezultatPos) {
+    lines.push("Pe scurt: firma este pe profit, dar marja neta este foarte subtire - un cost neasteptat sau o scadere de vanzari poate transforma rapid profitul in pierdere.");
+  } else {
+    lines.push("Pe scurt: firma inregistreaza pierdere in perioada analizata (an curent). Este important sa identificati rapid cauza principala.");
+  }
+  lines.push("");
+
+  const good = [];
+  if (rezultatPos) {
+    good.push(`Rezultatul net de la inceputul anului este pozitiv: ${formatCurrency(metrics.profitYtd)}.`);
+  }
+  if (metrics.crestereVenituriYoY !== null && metrics.crestereVenituriYoY > 0) {
+    good.push(`Veniturile au crescut fata de anul anterior cu ${formatPercent(metrics.crestereVenituriYoY)} (${formatCurrency(metrics.deltaVenituriYoY)}).`);
+  }
+  if (metrics.crestereProfitYoY !== null && metrics.crestereProfitYoY > 0) {
+    good.push(`Profitul a crescut fata de anul anterior cu ${formatPercent(metrics.crestereProfitYoY)}.`);
+  }
+  if (metrics.cashOutRatio !== null && metrics.cashOutRatio < 0.7) {
+    good.push("Cheltuielile operationale (cash-out) raman sub 70% din venituri, ceea ce lasa o rezerva confortabila pentru neprevazute.");
+  }
+  if (!good.length) {
+    good.push("Nu au fost identificate automat puncte forte clare in aceasta perioada.");
+  }
+  lines.push("Ce functioneaza bine:");
+  good.forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+
+  const risks = [];
+  if (!rezultatPos) {
+    risks.push(`Firma inregistreaza pierdere de ${formatCurrency(Math.abs(metrics.profitYtd))} de la inceputul anului.`);
+  }
+  if (metrics.marjaNeta !== null && metrics.marjaNeta < 0.03) {
+    risks.push(`Marja neta este de doar ${formatPercent(metrics.marjaNeta)} - orice crestere de costuri poate transforma profitul in pierdere.`);
+  }
+  if (metrics.crestereVenituriYoY !== null && metrics.crestereVenituriYoY < 0) {
+    risks.push(`Veniturile au scazut fata de anul anterior cu ${formatPercent(Math.abs(metrics.crestereVenituriYoY))}.`);
+  }
+  if (cheltuieliCrescMaiRepede) {
+    risks.push("Cheltuielile cresc mai repede decat veniturile fata de anul anterior - verificati ce categorii de costuri au crescut cel mai mult (sectiunea 6 de mai jos).");
+  }
+  if (metrics.cashOutRatio !== null && metrics.cashOutRatio > 0.9) {
+    risks.push(`Cheltuielile operationale (cash-out) consuma ${formatPercent(metrics.cashOutRatio)} din venituri - marja de siguranta pentru cheltuieli neprevazute este foarte mica.`);
+  }
+  if (metrics.pondereMarfa !== null && metrics.pondereMarfa > 0.75) {
+    risks.push(`Costul marfii reprezinta ${formatPercent(metrics.pondereMarfa)} din total cheltuieli - profitabilitatea depinde in principal de adaosul comercial.`);
+  }
+  if (metrics.rataImpozitPeProfit !== null && metrics.rataImpozitPeProfit > 0.3) {
+    risks.push(`Impozitul pe profit reprezinta ${formatPercent(metrics.rataImpozitPeProfit)} din rezultatul net - discutati cu contabilul daca toate cheltuielile deductibile au fost corect aplicate.`);
+  }
+  if (metrics.amenziPenalitati && metrics.amenziPenalitati.total > 0) {
+    risks.push(`Exista amenzi/penalitati inregistrate: ${formatCurrency(metrics.amenziPenalitati.total)} - recomand verificarea cauzei pentru a evita repetarea.`);
+  }
+  if (metrics.dividendeDePlata && metrics.dividendeDePlata.total > 0) {
+    risks.push(`Exista miscari pe dividende de plata: ${formatCurrency(metrics.dividendeDePlata.total)} - verificati corelarea cu hotararile AGA si profitul distribuibil.`);
+  }
+  if (!risks.length) {
+    risks.push("Nu au fost identificate riscuri majore pe baza regulilor automate configurate.");
+  }
+  lines.push("Ce necesita atentie:");
+  risks.forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+
+  const recs = [];
+  if (!rezultatPos || (metrics.marjaNeta !== null && metrics.marjaNeta < 0.05)) {
+    recs.push("Revizuiti preturile de vanzare si costurile principale (marfa, personal, servicii) pentru a imbunatati marja neta.");
+  }
+  if (metrics.worstMonth) {
+    recs.push(`Analizati ce s-a intamplat in luna cu cel mai slab rezultat (${metrics.worstMonth.month}) pentru a evita repetarea.`);
+  }
+  if (metrics.pondereCheltuieliSensibile !== null && metrics.pondereCheltuieliSensibile > 0.05) {
+    recs.push("Reduceti cheltuielile sensibile fiscal (amenzi, sponsorizari, protocol, cheltuieli nedeductibile) - au impact negativ atat asupra profitului cat si asupra bazei impozabile.");
+  }
+  if (metrics.topExpenseAccounts && metrics.topExpenseAccounts.length) {
+    recs.push("Verificati topul cheltuielilor (sectiunea 6 de mai jos) pentru a identifica rapid unde se poate negocia sau reduce costul.");
+  }
+  if (!recs.length) {
+    recs.push("Continuati monitorizarea lunara a indicatorilor de mai jos pentru a mentine situatia financiara sanatoasa.");
+  }
+  lines.push("Recomandari concrete:");
+  recs.forEach((item) => lines.push(`- ${item}`));
+
+  return lines;
+}
+
+function buildAdminSummaryStandard(metrics) {
+  const lines = [];
+  const rezultatPos = metrics.profitNet >= 0;
+
+  lines.push("REZUMAT PE INTELESUL ADMINISTRATORULUI");
+  lines.push("");
+
+  if (rezultatPos && metrics.lichiditateCurenta !== null && metrics.lichiditateCurenta >= 1.2) {
+    lines.push("Pe scurt: firma este pe profit si are o structura financiara echilibrata. Verificati totusi punctele de atentie de mai jos.");
+  } else if (rezultatPos) {
+    lines.push("Pe scurt: firma este pe profit, dar lichiditatea curenta este la limita - verificati capacitatea de a acoperi datoriile pe termen scurt.");
+  } else {
+    lines.push("Pe scurt: firma inregistreaza pierdere in perioada raportata.");
+  }
+  lines.push("");
+
+  const good = [];
+  if (rezultatPos) {
+    good.push(`Rezultatul net este pozitiv: ${formatCurrency(metrics.profitNet)}.`);
+  }
+  if (metrics.solvabilitate !== null && metrics.solvabilitate >= 0.4) {
+    good.push(`Solvabilitatea este solida (${formatPercent(metrics.solvabilitate)} din active sunt finantate din capitaluri proprii).`);
+  }
+  if (metrics.fondRulment > 0) {
+    good.push(`Fondul de rulment este pozitiv (${formatCurrency(metrics.fondRulment)}) - activele circulante acopera datoriile curente.`);
+  }
+  if (!good.length) {
+    good.push("Nu au fost identificate automat puncte forte clare in aceasta perioada.");
+  }
+  lines.push("Ce functioneaza bine:");
+  good.forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+
+  const risks = [];
+  if (!rezultatPos) {
+    risks.push(`Firma inregistreaza pierdere de ${formatCurrency(Math.abs(metrics.profitNet))}.`);
+  }
+  if (metrics.lichiditateCurenta !== null && metrics.lichiditateCurenta < 1) {
+    risks.push("Activele circulante nu acopera integral datoriile curente - risc de dificultati in plata la timp a obligatiilor pe termen scurt.");
+  }
+  if (metrics.gradIndatorare !== null && metrics.gradIndatorare > 2) {
+    risks.push(`Gradul de indatorare este ridicat (${formatRatio(metrics.gradIndatorare)}) - firma depinde mult de finantare prin datorii.`);
+  }
+  if (metrics.solvabilitate !== null && metrics.solvabilitate < 0.2) {
+    risks.push(`Solvabilitatea este scazuta (${formatPercent(metrics.solvabilitate)}) - capitalurile proprii acopera doar o parte mica din active.`);
+  }
+  if (metrics.fondRulment < 0) {
+    risks.push(`Fondul de rulment este negativ (${formatCurrency(metrics.fondRulment)}) - o parte din activele imobilizate par finantate din datorii pe termen scurt, ceea ce este riscant.`);
+  }
+  if (metrics.missingIndicators && metrics.missingIndicators.length) {
+    risks.push("Unii indicatori nu au putut fi identificati automat din fisier - verificati denumirile randurilor sursa impreuna cu contabilul.");
+  }
+  if (!risks.length) {
+    risks.push("Nu au fost identificate riscuri majore pe baza regulilor automate configurate.");
+  }
+  lines.push("Ce necesita atentie:");
+  risks.forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+
+  const recs = [];
+  if (!rezultatPos) {
+    recs.push("Analizati structura veniturilor si cheltuielilor pentru a identifica principala cauza a pierderii.");
+  }
+  if (metrics.lichiditateCurenta !== null && metrics.lichiditateCurenta < 1) {
+    recs.push("Prioritizati incasarea creantelor si negocierea termenelor de plata catre furnizori.");
+  }
+  if (metrics.gradIndatorare !== null && metrics.gradIndatorare > 2) {
+    recs.push("Evaluati posibilitatea de a reduce datoriile sau de a majora capitalul propriu (de exemplu prin reinvestirea profitului).");
+  }
+  if (!recs.length) {
+    recs.push("Continuati monitorizarea periodica a indicatorilor cheie pentru a mentine echilibrul financiar.");
+  }
+  lines.push("Recomandari concrete:");
+  recs.forEach((item) => lines.push(`- ${item}`));
+
+  return lines;
+}
+
 function buildReport({ companyName, adminName, reportPeriod, metrics }) {
   if (metrics.mode === "pdf-balance") {
     if (metrics.error) {
@@ -1953,6 +2221,10 @@ function buildReport({ companyName, adminName, reportPeriod, metrics }) {
       `Mai jos aveti analiza financiara pentru ${companyName}, perioada ${reportPeriod}, pe baza balantei de verificare PDF/XLS.`,
       `- Companie identificata in document: ${metrics.metadata.company || "n/a"}`,
       `- Perioada identificata in document: ${metrics.metadata.period || "n/a"}`,
+      "",
+      ...buildAdminSummaryPdfBalance(metrics),
+      "",
+      "--- Detalii tehnice (pentru contabil) ---",
       "",
       "1) Performanta perioada curenta",
       `- Venituri lunare estimate (clasa 7): ${formatCurrency(metrics.venituriLunare)}`,
@@ -2049,6 +2321,10 @@ function buildReport({ companyName, adminName, reportPeriod, metrics }) {
       "",
       `Mai jos aveti sinteza financiara pentru ${companyName}, perioada ${reportPeriod}, pe baza foii ${metrics.latestYear}:`,
       "",
+      ...buildAdminSummaryAccountBalance(metrics),
+      "",
+      "--- Detalii tehnice (pentru contabil) ---",
+      "",
       "1) Indicatori esentiali (YTD)",
       `- Total venituri: ${formatCurrency(metrics.totalVenituriYtd)}`,
       `- Total cheltuieli: ${formatCurrency(metrics.totalCheltuieliYtd)}`,
@@ -2128,6 +2404,10 @@ function buildReport({ companyName, adminName, reportPeriod, metrics }) {
     `Stimate/Stimata ${adminName},`,
     "",
     `Mai jos aveti sinteza indicatorilor esentiali pentru ${companyName}, perioada ${reportPeriod}:`,
+    "",
+    ...buildAdminSummaryStandard(metrics),
+    "",
+    "--- Detalii tehnice (pentru contabil) ---",
     "",
     "1) Date financiare esentiale",
     `- Total active: ${formatCurrency(metrics.totalActive)}`,

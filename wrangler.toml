@@ -1,5 +1,5 @@
 name = "balanta-istoric-api"
-main = "src/index.js"
+main = "index.js"
 compatibility_date = "2024-09-23"
 
 # Dupa ce rulezi:

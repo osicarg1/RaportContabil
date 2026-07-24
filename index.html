@@ -58,6 +58,26 @@
           (ex: Total Venituri, Total Cheltuieli, cont 121) pentru analiza automata.
         </p>
       </details>
+
+      <details class="hint" id="cloudConfigDetails">
+        <summary>Sincronizare in cloud (Cloudflare) - optional</summary>
+        <p>
+          Conecteaza aplicatia la propriul tau API Cloudflare (Worker + D1) pentru a pastra istoricul
+          analizelor si a-l regasi pe orice calculator. Vezi pasii de instalare in <code>worker/README.md</code>.
+        </p>
+        <label>
+          Adresa API (Worker URL)
+          <input id="cloudApiUrl" type="url" placeholder="https://balanta-istoric-api.subdomeniul-tau.workers.dev" />
+        </label>
+        <label>
+          Token API
+          <input id="cloudApiToken" type="password" placeholder="Token secret configurat in Worker" />
+        </label>
+        <div class="actions">
+          <button id="saveCloudConfigBtn" type="button">Salveaza setarile</button>
+        </div>
+        <p class="footnote" id="cloudConfigStatus"></p>
+      </details>
     </section>
 
     <section class="panel panel-right">
@@ -85,9 +105,41 @@
           <canvas id="monthlyChart" aria-label="Comparatie lunara" role="img"></canvas>
         </div>
       </section>
+
+      <section id="historySection" class="history" hidden>
+        <h3>Istoric si comparatie in timp</h3>
+        <p class="history-note">
+          Datele sunt stocate in baza de date conectata (vezi setarile de sincronizare de mai sus),
+          nu doar in acest browser.
+        </p>
+        <div class="chart-card">
+          <h4>Evolutie venituri / cheltuieli / rezultat (istoric salvat)</h4>
+          <canvas id="historyChart" aria-label="Istoric comparatie" role="img"></canvas>
+        </div>
+        <div class="history-table-wrap">
+          <table id="historyTable" class="history-table">
+            <thead>
+              <tr>
+                <th>Data salvarii</th>
+                <th>Perioada</th>
+                <th>Venituri</th>
+                <th>Cheltuieli</th>
+                <th>Rezultat</th>
+                <th>Marja</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="historyTableBody"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button id="refreshHistoryBtn" type="button">Reincarca istoric</button>
+          <button id="exportHistoryBtn" type="button">Exporta istoric (JSON)</button>
+        </div>
+      </section>
     </section>
   </main>
 
-  <script src="app.js?v=20260721-5"></script>
+  <script src="app.js?v=20260724-1"></script>
 </body>
 </html>

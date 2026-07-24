@@ -227,6 +227,76 @@ button:disabled,
   min-height: 0;
 }
 
+.history {
+  margin-top: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.history[hidden] {
+  display: none !important;
+}
+
+.history h3 {
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.history-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.history-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.history-table th,
+.history-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.history-table th {
+  background: #f6f1e6;
+  font-weight: 700;
+  color: #2a3837;
+}
+
+.history-empty {
+  color: var(--muted);
+  white-space: normal !important;
+}
+
+.history-delete {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 4px 10px;
+  font-size: 0.82rem;
+  border-radius: 8px;
+}
+
+#cloudConfigDetails label {
+  margin-top: 8px;
+}
+
+#cloudConfigStatus {
+  margin-top: 8px;
+}
+
 @media (max-width: 960px) {
   .shell {
     grid-template-columns: 1fr;

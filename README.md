@@ -1,68 +1,74 @@
-# Generator raport balanta pe conturi (web)
+# API istoric balanta (Cloudflare Worker + D1)
 
-Aplicatie web statica pentru analiza rapida a unei balante pe conturi si generarea unui email/raport catre administrator.
+Acest folder contine un API minimal, gazduit pe Cloudflare, care stocheaza intr-o baza de date D1
+instantaneele (venituri/cheltuieli/rezultat/marja) generate de aplicatie, pentru comparatie in timp.
 
-## Ce face
+Nu necesita cont de gazduire separat, doar un cont Cloudflare (are un nivel gratuit suficient pentru acest volum de date).
 
-- importa fisiere `.csv`, `.xls`, `.xlsx`;
-- detecteaza automat structura de balanta pe conturi, organizata pe ani/luni (foi de tip `2024`, `2025`, `2026`);
-- optional, poate interpreta si fisiere cu structura de formular financiar (unde apar randuri de tip `Nr. rd.`);
-- calculeaza indicatori esentiali:
-  - total active,
-  - active circulante,
-  - datorii curente,
-  - datorii pe termen lung,
-  - capitaluri proprii,
-  - cifra de afaceri,
-  - profit/pierdere net(a),
-  - fond de rulment,
-  - lichiditate curenta,
-  - grad de indatorare,
-  - solvabilitate;
-- genereaza text de email in limba romana si link `mailto:`.
+## Pasi de instalare (o singura data)
 
-Raportul incepe cu o sectiune **"Rezumat pe intelesul administratorului"** - fara jargon contabil - care contine:
-- verdict pe scurt (profit/pierdere, situatie sanatoasa sau cu risc);
-- "Ce functioneaza bine" - punctele forte identificate automat;
-- "Ce necesita atentie" - riscurile si problemele detectate (lichiditate, indatorare, marja, dividende, amenzi etc.);
-- "Recomandari concrete" - actiuni sugerate pe baza cifrelor gasite.
+1. **Instaleaza Wrangler** (CLI-ul Cloudflare), daca nu il ai deja:
+   ```
+   npm install -g wrangler
+   ```
 
-Sub aceasta sectiune ramane raportul tehnic detaliat (cifre pe conturi, rate financiare), util pentru contabil.
+2. **Autentifica-te** in contul Cloudflare (se deschide un tab de browser):
+   ```
+   wrangler login
+   ```
 
-Pentru fisiere de tip balanta pe conturi, aplicatia extrage:
-- total venituri,
-- total cheltuieli,
-- rezultat net estimat,
-- marja neta estimata,
-- ultima luna cu date nenule.
+3. **Creeaza baza de date D1**, din acest folder (`worker/`):
+   ```
+   wrangler d1 create balanta_istoric_db
+   ```
+   Comanda iti va afisa un `database_id`. Copiaza-l si inlocuieste
+   `PUNE_AICI_DATABASE_ID_PRIMIT_DE_LA_WRANGLER` din `wrangler.toml`.
 
-Aplicatia afiseaza si grafice de evolutie:
-- comparatie anuala (YTD) pentru venituri, cheltuieli, profit pe toti anii existenti in tab-uri;
-- comparatie lunara intre anul curent si anul precedent pentru venituri, cheltuieli si profit.
+4. **Creeaza tabelul** in baza de date:
+   ```
+   wrangler d1 execute balanta_istoric_db --remote --file=./schema.sql
+   ```
 
-## Utilizare
+5. **Seteaza un token secret** (parola API-ului tau) - alege un sir lung, aleator:
+   ```
+   wrangler secret put API_TOKEN
+   ```
+   Iti va cere sa introduci valoarea tokenului; pastreaz-o intr-un loc sigur, o vei introduce si in aplicatie.
 
-1. Deschide fisierul `index.html` in browser.
-2. Completeaza datele firmei si ale administratorului.
-3. Incarca fisierul balantei.
-4. Apasa `Genereaza raport`.
-5. Foloseste:
-   - `Copiaza text` pentru clipboard;
-   - `Deschide email` pentru draft automat in clientul de email local.
+6. **Publica Worker-ul**:
+   ```
+   wrangler deploy
+   ```
+   La final vei primi o adresa de forma:
+   ```
+   https://balanta-istoric-api.<subdomeniul-tau>.workers.dev
+   ```
 
-## Observatii de format pentru fisier
+## Configurare in aplicatie
 
-- Aplicatia identifica foile anuale, conturile contabile si randurile de sumar (de exemplu `Total Venituri`, `Total Cheltuieli`, cont `121`).
-- Pentru fiecare cont/rand relevant, aplica reguli de agregare pe luni si pe total perioada.
+In `index.html`, deschide sectiunea **"Sincronizare in cloud (Cloudflare)"** si introdu:
+- **Adresa API** = adresa primita la pasul 6 de mai sus.
+- **Token API** = valoarea introdusa la pasul 5.
 
-## Fisiere proiect
+Aceste doua valori se salveaza local, in browserul tau (nu se trimit nicaieri altundeva), astfel incat
+sa nu trebuiasca sa le retastezi de fiecare data. Trebuie introduse o singura data pe fiecare
+calculator/browser de pe care vrei sa folosesti aplicatia.
 
-- `index.html` - interfata.
-- `styles.css` - stilizare.
-- `app.js` - logica de import, calcul si generare raport.
-- `template-bilant-minim.csv` - exemplu minim de test.
+## Ce se intampla dupa configurare
 
-## Limitari
+- La fiecare "Genereaza raport", aplicatia trimite automat un instantaneu (venituri, cheltuieli,
+  rezultat, marja, si - unde e disponibil - lichiditate/grad de indatorare) catre acest API, asociat
+  firmei si perioadei introduse in formular.
+- Sectiunea "Istoric si comparatie in timp" din raport se incarca din acest API si arata evolutia
+  lunara sub forma de tabel + grafic.
+- Poti sterge o intrare individuala din tabel, sau exporta tot istoricul unei firme ca fisier JSON.
 
-- Este un instrument de sinteza, nu inlocuieste analiza contabila detaliata.
-- In functie de structura exportului, pot fi necesare ajustari in maparea randurilor din `app.js`.
+## Limitari si observatii de securitate
+
+- Modelul de autorizare este simplu: **un singur token, partajat**, verificat pe fiecare cerere.
+  Este suficient pentru un instrument de uz propriu/intern, dar **oricine detine tokenul poate
+  citi, scrie si sterge orice inregistrare**, indiferent de firma. Nu distribui tokenul.
+- Nu exista limitare de rate (rate limiting) sau audit log in aceasta implementare minimala.
+- Datele stocate sunt doar instantaneele numerice (nu si textul integral al raportului).
+- Daca vrei sa revoci accesul cuiva sau sa schimbi tokenul, ruleaza din nou
+  `wrangler secret put API_TOKEN` cu o valoare noua si actualizeaza-l si in aplicatie.

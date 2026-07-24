@@ -1,0 +1,11 @@
+name = "balanta-istoric-api"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+# Dupa ce rulezi:
+#   wrangler d1 create balanta_istoric_db
+# copiaza "database_id" primit in raspuns aici mai jos.
+[[d1_databases]]
+binding = "DB"
+database_name = "balanta_istoric_db"
+database_id = "PUNE_AICI_DATABASE_ID_PRIMIT_DE_LA_WRANGLER"

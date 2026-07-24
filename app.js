@@ -11,16 +11,83 @@ const adminNameInput = document.getElementById("adminName");
 const adminEmailInput = document.getElementById("adminEmail");
 const reportPeriodInput = document.getElementById("reportPeriod");
 const balanceFileInput = document.getElementById("balanceFile");
+const cloudApiUrlInput = document.getElementById("cloudApiUrl");
+const cloudApiTokenInput = document.getElementById("cloudApiToken");
+const saveCloudConfigBtn = document.getElementById("saveCloudConfigBtn");
+const cloudConfigStatus = document.getElementById("cloudConfigStatus");
+const historySection = document.getElementById("historySection");
+const historyTableBody = document.getElementById("historyTableBody");
+const historyChartCanvas = document.getElementById("historyChart");
+const refreshHistoryBtn = document.getElementById("refreshHistoryBtn");
+const exportHistoryBtn = document.getElementById("exportHistoryBtn");
 
 let yearlyChartInstance = null;
 let monthlyChartInstance = null;
+let historyChartInstance = null;
 let extractionCache = {
   key: "",
   rows: null
 };
 
+const CLOUD_CONFIG_KEY = "balantaCloudConfig";
+
 if (chartsSection) {
   chartsSection.hidden = true;
+}
+
+if (historySection) {
+  historySection.hidden = true;
+}
+
+initCloudConfigFields();
+
+if (saveCloudConfigBtn) {
+  saveCloudConfigBtn.addEventListener("click", () => {
+    const apiUrl = (cloudApiUrlInput && cloudApiUrlInput.value.trim()) || "";
+    const apiToken = (cloudApiTokenInput && cloudApiTokenInput.value.trim()) || "";
+    setCloudConfig({ apiUrl, apiToken });
+
+    if (cloudConfigStatus) {
+      cloudConfigStatus.textContent = apiUrl
+        ? "Setari salvate in acest browser. Istoricul va fi sincronizat la urmatorul raport generat."
+        : "Sincronizarea cloud este dezactivata (adresa API este goala).";
+    }
+
+    const company = companyNameInput.value.trim();
+    if (company) {
+      refreshHistory(company);
+    }
+  });
+}
+
+if (refreshHistoryBtn) {
+  refreshHistoryBtn.addEventListener("click", () => {
+    refreshHistory(companyNameInput.value.trim());
+  });
+}
+
+if (exportHistoryBtn) {
+  exportHistoryBtn.addEventListener("click", async () => {
+    const company = companyNameInput.value.trim();
+    if (!company) {
+      alert("Completeaza numele firmei pentru a exporta istoricul acesteia.");
+      return;
+    }
+
+    try {
+      const entries = await loadHistoryRemote(company);
+      const blob = new Blob([JSON.stringify(entries, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `istoric-balanta-${company.replace(/\s+/g, "_")}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(error);
+      alert("Nu am putut exporta istoricul. Verifica setarile de sincronizare in cloud.");
+    }
+  });
 }
 
 const indicatorDefinitions = {
@@ -100,6 +167,14 @@ form.addEventListener("submit", async (event) => {
     copyBtn.disabled = false;
     updateMailto(adminEmail, companyName, reportPeriod, report);
     renderEvolutionCharts(metrics);
+
+    try {
+      await saveCurrentAnalysisToHistory(companyName, reportPeriod, metrics);
+    } catch (historyError) {
+      console.warn("Nu am putut salva analiza in istoricul cloud:", historyError);
+    }
+
+    await refreshHistory(companyName);
   } catch (error) {
     console.error(error);
     alert("Nu am putut procesa fisierul. Verifica formatul si incearca din nou.");
@@ -2180,6 +2255,307 @@ function buildAdminSummaryStandard(metrics) {
   recs.forEach((item) => lines.push(`- ${item}`));
 
   return lines;
+}
+
+function getCloudConfig() {
+  try {
+    const raw = localStorage.getItem(CLOUD_CONFIG_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    console.warn("Nu am putut citi setarile de sincronizare:", error);
+    return null;
+  }
+}
+
+function setCloudConfig(config) {
+  try {
+    localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(config));
+  } catch (error) {
+    console.warn("Nu am putut salva setarile de sincronizare:", error);
+  }
+}
+
+function initCloudConfigFields() {
+  const config = getCloudConfig();
+  if (!config) {
+    return;
+  }
+
+  if (cloudApiUrlInput && config.apiUrl) {
+    cloudApiUrlInput.value = config.apiUrl;
+  }
+  if (cloudApiTokenInput && config.apiToken) {
+    cloudApiTokenInput.value = config.apiToken;
+  }
+}
+
+function cloudApiBase(config) {
+  return String(config.apiUrl || "").replace(/\/+$/, "");
+}
+
+async function saveHistoryEntryRemote(entry) {
+  const config = getCloudConfig();
+  if (!config || !config.apiUrl) {
+    return null;
+  }
+
+  const response = await fetch(`${cloudApiBase(config)}/entries`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.apiToken || ""}`
+    },
+    body: JSON.stringify(entry)
+  });
+
+  if (!response.ok) {
+    const detail = await safeReadError(response);
+    throw new Error(`Salvare esuata (status ${response.status}).${detail ? ` ${detail}` : ""}`);
+  }
+
+  return response.json();
+}
+
+async function loadHistoryRemote(companyName) {
+  const config = getCloudConfig();
+  if (!config || !config.apiUrl || !companyName) {
+    return [];
+  }
+
+  const url = `${cloudApiBase(config)}/entries?company=${encodeURIComponent(companyName)}`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${config.apiToken || ""}` }
+  });
+
+  if (!response.ok) {
+    const detail = await safeReadError(response);
+    throw new Error(`Incarcare esuata (status ${response.status}).${detail ? ` ${detail}` : ""}`);
+  }
+
+  const data = await response.json();
+  return data.entries || [];
+}
+
+async function deleteHistoryEntryRemote(id) {
+  const config = getCloudConfig();
+  if (!config || !config.apiUrl) {
+    return;
+  }
+
+  const url = `${cloudApiBase(config)}/entries/${encodeURIComponent(id)}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${config.apiToken || ""}` }
+  });
+
+  if (!response.ok) {
+    const detail = await safeReadError(response);
+    throw new Error(`Stergere esuata (status ${response.status}).${detail ? ` ${detail}` : ""}`);
+  }
+}
+
+async function safeReadError(response) {
+  try {
+    const data = await response.json();
+    return data && data.error ? data.error : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function buildHistorySnapshot(metrics) {
+  if (metrics.mode === "pdf-balance") {
+    return {
+      mode: metrics.mode,
+      venituri: metrics.venituriLunare ?? null,
+      cheltuieli: metrics.cheltuieliLunare ?? null,
+      rezultat: metrics.rezultatCumulat ?? null,
+      marja: metrics.marjaLunara ?? null,
+      lichiditate: metrics.lichiditateImediata ?? null,
+      gradIndatorare: metrics.gradIndatorare ?? null
+    };
+  }
+
+  if (metrics.mode === "account-balance") {
+    return {
+      mode: metrics.mode,
+      venituri: metrics.totalVenituriYtd ?? null,
+      cheltuieli: metrics.totalCheltuieliYtd ?? null,
+      rezultat: metrics.profitYtd ?? null,
+      marja: metrics.marjaNeta ?? null,
+      lichiditate: null,
+      gradIndatorare: null
+    };
+  }
+
+  return {
+    mode: metrics.mode || "standard",
+    venituri: metrics.cifraAfaceri ?? null,
+    cheltuieli: null,
+    rezultat: metrics.profitNet ?? null,
+    marja: safeDivide(metrics.profitNet, metrics.cifraAfaceri),
+    lichiditate: metrics.lichiditateCurenta ?? null,
+    gradIndatorare: metrics.gradIndatorare ?? null
+  };
+}
+
+async function saveCurrentAnalysisToHistory(companyName, reportPeriod, metrics) {
+  const config = getCloudConfig();
+  if (!config || !config.apiUrl) {
+    return;
+  }
+
+  if (metrics.error) {
+    return;
+  }
+
+  const snapshot = buildHistorySnapshot(metrics);
+  const entry = {
+    id: generateEntryId(),
+    company_name: companyName,
+    report_period: reportPeriod,
+    mode: snapshot.mode,
+    venituri: snapshot.venituri,
+    cheltuieli: snapshot.cheltuieli,
+    rezultat: snapshot.rezultat,
+    marja: snapshot.marja,
+    lichiditate: snapshot.lichiditate,
+    grad_indatorare: snapshot.gradIndatorare,
+    generated_at: Date.now()
+  };
+
+  await saveHistoryEntryRemote(entry);
+}
+
+function generateEntryId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function refreshHistory(companyName) {
+  if (!historySection) {
+    return;
+  }
+
+  const config = getCloudConfig();
+  if (!config || !config.apiUrl || !companyName) {
+    historySection.hidden = true;
+    return;
+  }
+
+  try {
+    const entries = await loadHistoryRemote(companyName);
+    historySection.hidden = false;
+    renderHistoryTable(entries);
+    renderHistoryChart(entries);
+  } catch (error) {
+    console.error(error);
+    historySection.hidden = false;
+    if (historyTableBody) {
+      historyTableBody.innerHTML = `<tr><td colspan="7" class="history-empty">Eroare la incarcarea istoricului: ${escapeHtml(error.message)}</td></tr>`;
+    }
+    clearHistoryChart();
+  }
+}
+
+function renderHistoryTable(entries) {
+  if (!historyTableBody) {
+    return;
+  }
+
+  if (!entries.length) {
+    historyTableBody.innerHTML = '<tr><td colspan="7" class="history-empty">Nu exista inca date salvate pentru aceasta firma.</td></tr>';
+    return;
+  }
+
+  historyTableBody.innerHTML = entries.map((entry) => {
+    const savedDate = entry.generated_at ? new Date(Number(entry.generated_at)) : null;
+    const savedLabel = savedDate && !Number.isNaN(savedDate.getTime())
+      ? savedDate.toLocaleDateString("ro-RO")
+      : "n/a";
+
+    return `<tr>
+      <td>${escapeHtml(savedLabel)}</td>
+      <td>${escapeHtml(entry.report_period || "")}</td>
+      <td>${formatCurrency(entry.venituri)}</td>
+      <td>${entry.cheltuieli === null || entry.cheltuieli === undefined ? "n/a" : formatCurrency(entry.cheltuieli)}</td>
+      <td>${formatCurrency(entry.rezultat)}</td>
+      <td>${formatPercent(entry.marja)}</td>
+      <td><button type="button" class="history-delete" data-id="${escapeHtml(entry.id)}">Sterge</button></td>
+    </tr>`;
+  }).join("");
+
+  historyTableBody.querySelectorAll(".history-delete").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await deleteHistoryEntryRemote(button.getAttribute("data-id"));
+        await refreshHistory(companyNameInput.value.trim());
+      } catch (error) {
+        console.error(error);
+        alert("Nu am putut sterge intrarea din istoric.");
+      }
+    });
+  });
+}
+
+function renderHistoryChart(entries) {
+  clearHistoryChart();
+
+  if (!window.Chart || !historyChartCanvas || !entries.length) {
+    return;
+  }
+
+  const labels = entries.map((entry, index) => entry.report_period || `Intrare ${index + 1}`);
+
+  historyChartInstance = new Chart(historyChartCanvas, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Venituri",
+          data: entries.map((entry) => roundOrNull(entry.venituri)),
+          borderColor: "#0f766e",
+          backgroundColor: "rgba(15, 118, 110, 0.14)",
+          tension: 0.2
+        },
+        {
+          label: "Cheltuieli",
+          data: entries.map((entry) => roundOrNull(entry.cheltuieli)),
+          borderColor: "#ca5a1f",
+          backgroundColor: "rgba(202, 90, 31, 0.14)",
+          tension: 0.2
+        },
+        {
+          label: "Rezultat",
+          data: entries.map((entry) => roundOrNull(entry.rezultat)),
+          borderColor: "#1f2937",
+          backgroundColor: "rgba(31, 41, 55, 0.14)",
+          tension: 0.2
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: "top" }
+      }
+    }
+  });
+}
+
+function roundOrNull(value) {
+  return Number.isFinite(value) ? Math.round(value) : null;
+}
+
+function clearHistoryChart() {
+  if (historyChartInstance) {
+    historyChartInstance.destroy();
+    historyChartInstance = null;
+  }
 }
 
 function buildReport({ companyName, adminName, reportPeriod, metrics }) {

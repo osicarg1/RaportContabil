@@ -8,4 +8,4 @@ compatibility_date = "2024-09-23"
 [[d1_databases]]
 binding = "DB"
 database_name = "balanta_istoric_db"
-database_id = "PUNE_AICI_DATABASE_ID_PRIMIT_DE_LA_WRANGLER"
+database_id = "ab5afe07-c1e5-40d4-bad1-a5ef03c282f1"
